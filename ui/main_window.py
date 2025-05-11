@@ -7,6 +7,7 @@
 
 import os
 import uuid
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -17,7 +18,7 @@ from PyQt6.QtWidgets import (
     QDialog, QInputDialog, QHeaderView, QTableWidget, QTableWidgetItem,
     QGroupBox, QScrollArea
 )
-from PyQt6.QtCore import Qt, QThreadPool, QRunnable, pyqtSignal, pyqtSlot, QObject, QSize
+from PyQt6.QtCore import Qt, QThreadPool, QRunnable, pyqtSignal, pyqtSlot, QObject, QSize, QMetaObject
 from PyQt6.QtGui import QAction, QIcon, QFont
 
 from db.database import DatabaseManager, StatsDatabase
@@ -26,6 +27,8 @@ from ui.visualizations import PlaceDistributionChart, StatsGrid
 from parsers.hand_history import HandHistoryParser
 from parsers.tournament_summary import TournamentSummaryParser
 
+# Настройка логирования
+logger = logging.getLogger('ROYAL_Stats.MainWindow')
 
 # Сигналы для выполнения задач в отдельном потоке
 class WorkerSignals(QObject):
@@ -52,19 +55,38 @@ class Worker(QRunnable):
         self.kwargs = kwargs
         self.signals = WorkerSignals()
         
+        # Логирование для отладки
+        self.logger = logging.getLogger('ROYAL_Stats.Worker')
+        
     @pyqtSlot()
     def run(self):
         """
         Выполняет функцию в отдельном потоке.
         """
         try:
+            # Сообщаем о начале работы
             self.signals.started.emit()
+            self.logger.debug(f"Worker начал выполнение функции {self.fn.__name__}")
+            
+            # Выполняем функцию
             result = self.fn(*self.args, **self.kwargs)
+            
+            # Отправляем результат
             self.signals.result.emit(result)
+            self.logger.debug(f"Worker успешно выполнил функцию {self.fn.__name__}")
+            
         except Exception as e:
+            # Логируем ошибку
+            self.logger.error(f"Ошибка в Worker при выполнении {self.fn.__name__}: {str(e)}", 
+                            exc_info=True)
+            
+            # Отправляем сигнал об ошибке
             self.signals.error.emit(str(e))
+            
         finally:
+            # В любом случае сообщаем о завершении работы
             self.signals.finished.emit()
+            self.logger.debug(f"Worker завершил выполнение функции {self.fn.__name__}")
 
 
 class MainWindow(QMainWindow):
@@ -618,13 +640,21 @@ class MainWindow(QMainWindow):
         # Отключаем кнопки
         self.load_files_button.setEnabled(False)
         
+        # Добавляем слот для обновления прогресс-бара
+        @pyqtSlot(QProgressBar, int)
+        def update_progress(self, progress_bar, value):
+            progress_bar.setValue(value)
+        
+        # Регистрируем слот как метод класса
+        self.update_progress = update_progress
+        
         # Создаем worker для обработки файлов в отдельном потоке
         worker = Worker(self.process_files, file_paths, session_id)
         
         # Подключаем сигналы
-        worker.signals.progress.connect(self.update_progress)
         worker.signals.finished.connect(self.on_files_processing_finished)
         worker.signals.error.connect(self.on_files_processing_error)
+        worker.signals.result.connect(self.on_files_processing_result)
         
         # Запускаем обработку в отдельном потоке
         self.threadpool.start(worker)
@@ -644,7 +674,7 @@ class MainWindow(QMainWindow):
         hand_history_files = []
         tournament_summary_files = []
         
-        for file_path in file_paths:
+        for index, file_path in enumerate(file_paths):
             # Определяем тип файла по содержимому
             with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
                 content = file.read(1000)  # Читаем первые 1000 символов
@@ -654,6 +684,12 @@ class MainWindow(QMainWindow):
                 else:
                     hand_history_files.append(file_path)
                     
+            # Отправляем прогресс через QMetaObject.invokeMethod
+            # Поскольку мы находимся в другом потоке и не можем напрямую взаимодействовать с UI
+            QMetaObject.invokeMethod(self, "update_progress", 
+                                  Qt.ConnectionType.QueuedConnection,
+                                  self.progress_bar, index + 1)
+                
         # Словарь для хранения результатов обработки
         results = {
             'total_files': len(file_paths),
@@ -677,9 +713,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 results['errors'].append(f"Ошибка при обработке {file_path}: {str(e)}")
                 
-            # Обновляем прогресс
-            self.signals.progress.emit(i + 1)
-                
         # Обрабатываем файлы истории рук
         for i, file_path in enumerate(hand_history_files):
             try:
@@ -698,9 +731,6 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 results['errors'].append(f"Ошибка при обработке {file_path}: {str(e)}")
                 
-            # Обновляем прогресс
-            self.signals.progress.emit(len(tournament_summary_files) + i + 1)
-                
         # Обновляем статистику сессии
         self.stats_db.update_session_stats(session_id)
         
@@ -708,15 +738,38 @@ class MainWindow(QMainWindow):
         self.stats_db.update_overall_statistics()
         
         return results
-        
-    def update_progress(self, value):
+
+    def on_files_processing_result(self, results):
         """
-        Обновляет прогресс-бар.
+        Обработчик получения результатов обработки файлов.
         
         Args:
-            value: Новое значение
+            results: Словарь с результатами обработки
         """
-        self.progress_bar.setValue(value)
+        # Проверяем наличие ошибок
+        if results.get('errors'):
+            error_message = "При обработке файлов возникли ошибки:\n\n"
+            error_message += "\n".join(results['errors'][:5])  # Показываем первые 5 ошибок
+            
+            if len(results['errors']) > 5:
+                error_message += f"\n\n...и еще {len(results['errors']) - 5} ошибок."
+                
+            QMessageBox.warning(
+                self,
+                "Предупреждение",
+                error_message
+            )
+        
+        # Выводим статистику обработки
+        stats_message = (
+            f"Обработано файлов: {results['total_files']}\n"
+            f"Файлов сводки турниров: {results['tournament_summary_files']}\n"
+            f"Файлов истории рук: {results['hand_history_files']}\n"
+            f"Обработано турниров: {results['processed_tournaments']}\n"
+            f"Обработано нокаутов: {results['processed_knockouts']}"
+        )
+        
+        self.status_bar.showMessage(stats_message, 5000)  # Показываем на 5 секунд
         
     def on_files_processing_finished(self):
         """
@@ -1107,3 +1160,17 @@ class MainWindow(QMainWindow):
             "<p>Версия: 1.0</p>"
             "<p>© 2025 Royal Team</p>"
         )
+        
+    def closeEvent(self, event):
+        """
+        Обработчик закрытия окна приложения.
+        """
+        # Ждем завершения всех потоков
+        self.threadpool.waitForDone()
+        
+        # Закрываем соединение с БД, если оно открыто
+        if self.db_manager:
+            self.db_manager.close()
+            
+        # Принимаем событие закрытия
+        event.accept()
