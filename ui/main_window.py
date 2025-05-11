@@ -8,6 +8,7 @@
 import os
 import uuid
 import logging
+import re
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple, Any
 
@@ -18,7 +19,7 @@ from PyQt6.QtWidgets import (
     QDialog, QInputDialog, QHeaderView, QTableWidget, QTableWidgetItem,
     QGroupBox, QScrollArea
 )
-from PyQt6.QtCore import Qt, QThreadPool, QRunnable, pyqtSignal, pyqtSlot, QObject, QSize, QMetaObject
+from PyQt6.QtCore import Qt, QThreadPool, QRunnable, pyqtSignal, pyqtSlot, QObject, QSize
 from PyQt6.QtGui import QAction, QIcon, QFont
 
 from db.database import DatabaseManager, StatsDatabase
@@ -121,7 +122,7 @@ class MainWindow(QMainWindow):
         """
         Инициализирует элементы интерфейса.
         """
-        self.setWindowTitle("ROYAL_Stats - Покерный трекер")
+        self.setWindowTitle("Royal Stats by disikk")
         self.setMinimumSize(1200, 800)
         
         # Создаем центральный виджет
@@ -190,28 +191,14 @@ class MainWindow(QMainWindow):
         self.tournaments_table = QTableWidget()
         self.tournaments_table.setColumnCount(7)
         self.tournaments_table.setHorizontalHeaderLabels([
-            "ID турнира", "Название", "Место", "Выигрыш", "x10 Накауты", "Игроков", "Дата"
+            "ID турнира", "Buy-in", "Место", "Выигрыш", "Нокаутов", "x10 Нокауты", "Дата"
         ])
         self.tournaments_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
         tournaments_layout.addWidget(self.tournaments_table)
         
-        # Вкладка "Накауты"
-        self.knockouts_tab = QWidget()
-        knockouts_layout = QVBoxLayout(self.knockouts_tab)
-        
-        # Таблица с накаутами
-        self.knockouts_table = QTableWidget()
-        self.knockouts_table.setColumnCount(5)
-        self.knockouts_table.setHorizontalHeaderLabels([
-            "ID турнира", "ID раздачи", "Игрок", "Размер банка", "Дележка"
-        ])
-        self.knockouts_table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        knockouts_layout.addWidget(self.knockouts_table)
-        
         # Добавляем вкладки
         self.tabs.addTab(self.stats_tab, "Статистика")
         self.tabs.addTab(self.tournaments_tab, "Турниры")
-        self.tabs.addTab(self.knockouts_tab, "Накауты")
         
         # Добавляем виджеты на сплиттер
         splitter.addWidget(self.sessions_tree)
@@ -290,14 +277,6 @@ class MainWindow(QMainWindow):
         clear_data_action = QAction("Очистить все данные", self)
         clear_data_action.triggered.connect(self.clear_all_data)
         tools_menu.addAction(clear_data_action)
-        
-        # Меню "Справка"
-        help_menu = self.menuBar().addMenu("Справка")
-        
-        # О программе
-        about_action = QAction("О программе", self)
-        about_action.triggered.connect(self.show_about_dialog)
-        help_menu.addAction(about_action)
         
     def show_database_dialog(self):
         """
@@ -397,13 +376,11 @@ class MainWindow(QMainWindow):
             self.current_session_id = None
             self.update_statistics()
             self.load_all_tournaments()
-            self.load_all_knockouts()
         else:
             # Выбрана конкретная сессия
             self.current_session_id = session_id
             self.update_session_statistics(session_id)
             self.load_session_tournaments(session_id)
-            self.load_session_knockouts(session_id)
             
     def show_session_context_menu(self, position):
         """
@@ -613,13 +590,29 @@ class MainWindow(QMainWindow):
             )
             return
             
-        # Показываем диалог выбора файлов
-        file_paths, _ = QFileDialog.getOpenFileNames(
-            self,
-            "Выберите файлы истории рук и сводки турниров",
-            "",
-            "Text Files (*.txt);;All Files (*)"
-        )
+        # Показываем диалог выбора файлов или папок
+        dialog = QFileDialog(self)
+        dialog.setFileMode(QFileDialog.FileMode.Directory)
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, False)
+        dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        dialog.setWindowTitle("Выберите файлы или папки")
+
+        # Список файлов для обработки
+        file_paths = []
+
+        if dialog.exec():
+            # Получаем выбранные файлы и папки
+            selected_paths = dialog.selectedFiles()
+            
+            for path in selected_paths:
+                if os.path.isdir(path):
+                    # Если это папка, добавляем все файлы из нее и ее подпапок
+                    for root, dirs, files in os.walk(path):
+                        for file in files:
+                            file_paths.append(os.path.join(root, file))
+                else:
+                    # Если это файл, просто добавляем его
+                    file_paths.append(path)
         
         if not file_paths:
             return
@@ -640,14 +633,6 @@ class MainWindow(QMainWindow):
         # Отключаем кнопки
         self.load_files_button.setEnabled(False)
         
-        # Добавляем слот для обновления прогресс-бара
-        @pyqtSlot(QProgressBar, int)
-        def update_progress(self, progress_bar, value):
-            progress_bar.setValue(value)
-        
-        # Регистрируем слот как метод класса
-        self.update_progress = update_progress
-        
         # Создаем worker для обработки файлов в отдельном потоке
         worker = Worker(self.process_files, file_paths, session_id)
         
@@ -655,6 +640,7 @@ class MainWindow(QMainWindow):
         worker.signals.finished.connect(self.on_files_processing_finished)
         worker.signals.error.connect(self.on_files_processing_error)
         worker.signals.result.connect(self.on_files_processing_result)
+        worker.signals.progress.connect(self.progress_bar.setValue)
         
         # Запускаем обработку в отдельном потоке
         self.threadpool.start(worker)
@@ -675,20 +661,17 @@ class MainWindow(QMainWindow):
         tournament_summary_files = []
         
         for index, file_path in enumerate(file_paths):
-            # Определяем тип файла по содержимому
-            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
-                content = file.read(1000)  # Читаем первые 1000 символов
+            file_name = os.path.basename(file_path)
+            
+            # Проверяем соответствие имени файла шаблонам
+            if file_name.endswith('9max.txt'):
+                hand_history_files.append(file_path)
+            elif ('Tournament #' in file_name and 'Mystery Battle Royale' in file_name and 
+                  file_name.endswith('.txt')):
+                tournament_summary_files.append(file_path)
                 
-                if 'Tournament #' in content and 'Buy-in:' in content and 'You finished the tournament' in content:
-                    tournament_summary_files.append(file_path)
-                else:
-                    hand_history_files.append(file_path)
-                    
-            # Отправляем прогресс через QMetaObject.invokeMethod
-            # Поскольку мы находимся в другом потоке и не можем напрямую взаимодействовать с UI
-            QMetaObject.invokeMethod(self, "update_progress", 
-                                  Qt.ConnectionType.QueuedConnection,
-                                  self.progress_bar, index + 1)
+            # Отправляем сигнал прогресса
+            self.signals.progress.emit(index + 1)
                 
         # Словарь для хранения результатов обработки
         results = {
@@ -707,7 +690,7 @@ class MainWindow(QMainWindow):
                 tournament_data = self.tournament_summary_parser.parse_file(file_path)
                 
                 # Сохраняем данные в БД
-                self.stats_db.save_tournament_data(tournament_data, session_id)
+                self.stats_db.save_tournament_data(tournament_data.__dict__, session_id)
                 
                 results['processed_tournaments'] += 1
             except Exception as e:
@@ -719,7 +702,7 @@ class MainWindow(QMainWindow):
                 # Парсим файл
                 hand_history_data = self.hand_history_parser.parse_file(file_path)
                 
-                # Сохраняем накауты в БД
+                # Сохраняем нокауты в БД
                 if hand_history_data.get('tournament_id') and hand_history_data.get('knockouts'):
                     self.stats_db.save_knockouts_data(
                         hand_history_data['tournament_id'],
@@ -844,80 +827,82 @@ class MainWindow(QMainWindow):
                 f"Не удалось обновить статистику: {str(e)}"
             )
             
-    def update_session_statistics(self, session_id):
-        """
-        Обновляет статистику конкретной сессии.
+def update_session_statistics(self, session_id):
+    """
+    Обновляет статистику конкретной сессии.
+    
+    Args:
+        session_id: ID сессии
+    """
+    if not self.stats_db:
+        return
         
-        Args:
-            session_id: ID сессии
-        """
-        if not self.stats_db:
+    try:
+        # Получаем статистику сессии
+        session_stats = self.stats_db.get_session_stats(session_id)
+        
+        if not session_stats:
             return
             
-        try:
-            # Получаем статистику сессии
-            session_stats = self.stats_db.get_session_stats(session_id)
+        # Подготавливаем данные для отображения
+        stats = {
+            'total_tournaments': session_stats['tournaments_count'],
+            'total_knockouts': session_stats['knockouts_count'],
+            'avg_finish_place': session_stats['avg_finish_place'],
+            'total_prize': session_stats['total_prize'],
             
-            if not session_stats:
-                return
+            # Получаем данные о местах из турниров сессии
+            'first_places': 0,
+            'second_places': 0,
+            'third_places': 0,
+            'total_knockouts_x2': 0,
+            'total_knockouts_x10': 0,
+            'total_knockouts_x100': 0,
+            'total_knockouts_x1000': 0,
+            'total_knockouts_x10000': 0
+        }
+        
+        # Получаем турниры сессии
+        tournaments = self.stats_db.get_session_tournaments(session_id)
+        
+        # Заполняем данные о местах и нокаутах
+        for tournament in tournaments:
+            place = tournament.get('finish_place')
+            if place == 1:
+                stats['first_places'] += 1
+            elif place == 2:
+                stats['second_places'] += 1
+            elif place == 3:
+                stats['third_places'] += 1
                 
-            # Подготавливаем данные для отображения
-            stats = {
-                'total_tournaments': session_stats['tournaments_count'],
-                'total_knockouts': session_stats['knockouts_count'],
-                'avg_finish_place': session_stats['avg_finish_place'],
-                'total_prize': session_stats['total_prize'],
+            stats['total_knockouts_x2'] += tournament.get('knockouts_x2', 0)
+            stats['total_knockouts_x10'] += tournament.get('knockouts_x10', 0)
+            stats['total_knockouts_x100'] += tournament.get('knockouts_x100', 0)
+            stats['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0)
+            stats['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0)
+            
+        # Обновляем сетку с основными показателями
+        self.stats_grid.update_stats(stats)
+        
+        # Получаем распределение мест для сессии
+        places_distribution = {i: 0 for i in range(1, 10)}
+        for tournament in tournaments:
+            place = tournament.get('finish_place')
+            if place and 1 <= place <= 9:
+                places_distribution[place] += 1
                 
-                # Получаем данные о местах из турниров сессии
-                'first_places': 0,
-                'second_places': 0,
-                'third_places': 0,
-                'total_knockouts_x10': 0,
-                'total_knockouts_x100': 0,
-                'total_knockouts_x1000': 0,
-                'total_knockouts_x10000': 0
-            }
-            
-            # Получаем турниры сессии
-            tournaments = self.stats_db.get_session_tournaments(session_id)
-            
-            # Заполняем данные о местах и накаутах
-            for tournament in tournaments:
-                place = tournament.get('finish_place')
-                if place == 1:
-                    stats['first_places'] += 1
-                elif place == 2:
-                    stats['second_places'] += 1
-                elif place == 3:
-                    stats['third_places'] += 1
+        # Обновляем гистограмму
+        self.place_chart.update_chart(places_distribution)
+        
+        # Отображаем сообщение
+        self.status_bar.showMessage(f"Статистика сессии '{session_stats['session_name']}' обновлена")
+    except Exception as e:
+        QMessageBox.critical(
+            self,
+            "Ошибка",
+            f"Не удалось обновить статистику сессии: {str(e)}"
+        )
                     
-                stats['total_knockouts_x10'] += tournament.get('knockouts_x10', 0)
-                stats['total_knockouts_x100'] += tournament.get('knockouts_x100', 0)
-                stats['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0)
-                stats['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0)
-                
-            # Обновляем сетку с основными показателями
-            self.stats_grid.update_stats(stats)
-            
-            # Получаем распределение мест для сессии
-            places_distribution = {i: 0 for i in range(1, 10)}
-            for tournament in tournaments:
-                place = tournament.get('finish_place')
-                if place and 1 <= place <= 9:
-                    places_distribution[place] += 1
-                    
-            # Обновляем гистограмму
-            self.place_chart.update_chart(places_distribution)
-            
-            # Отображаем сообщение
-            self.status_bar.showMessage(f"Статистика сессии '{session_stats['session_name']}' обновлена")
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Ошибка",
-                f"Не удалось обновить статистику сессии: {str(e)}"
-            )
-            
     def load_all_tournaments(self):
         """
         Загружает список всех турниров.
@@ -928,7 +913,7 @@ class MainWindow(QMainWindow):
         try:
             # Получаем все турниры
             self.db_manager.cursor.execute(
-                "SELECT * FROM tournaments ORDER BY start_time DESC"
+                "SELECT t.*, (SELECT COUNT(*) FROM knockouts k WHERE k.tournament_id = t.tournament_id) as knockouts_count FROM tournaments t ORDER BY start_time DESC"
             )
             tournaments = self.db_manager.cursor.fetchall()
             
@@ -953,8 +938,19 @@ class MainWindow(QMainWindow):
             return
             
         try:
-            # Получаем турниры сессии
-            tournaments = self.stats_db.get_session_tournaments(session_id)
+            # Получаем турниры сессии с количеством нокаутов для каждого
+            self.db_manager.cursor.execute(
+                """
+                SELECT t.*, 
+                       (SELECT COUNT(*) FROM knockouts k WHERE k.tournament_id = t.tournament_id 
+                        AND k.session_id = t.session_id) as knockouts_count
+                FROM tournaments t 
+                WHERE t.session_id = ? 
+                ORDER BY start_time DESC
+                """,
+                (session_id,)
+            )
+            tournaments = self.db_manager.cursor.fetchall()
             
             # Отображаем турниры в таблице
             self._update_tournaments_table(tournaments)
@@ -985,9 +981,10 @@ class MainWindow(QMainWindow):
                 row, 0, QTableWidgetItem(str(tournament['tournament_id']))
             )
             
-            # Название
+            # Buy-in
+            buy_in = tournament.get('buy_in', 0)
             self.tournaments_table.setItem(
-                row, 1, QTableWidgetItem(tournament.get('tournament_name', ''))
+                row, 1, QTableWidgetItem(f"${buy_in:.2f}" if buy_in else '')
             )
             
             # Место
@@ -1001,107 +998,21 @@ class MainWindow(QMainWindow):
                 row, 3, QTableWidgetItem(f"${prize:.2f}" if prize else '')
             )
             
-            # x10 Накауты
+            # Нокаутов
+            knockouts_count = tournament.get('knockouts_count', 0)
             self.tournaments_table.setItem(
-                row, 4, QTableWidgetItem(str(tournament.get('knockouts_x10', 0)))
+                row, 4, QTableWidgetItem(str(knockouts_count))
             )
             
-            # Игроков
+            # x10 Нокауты
             self.tournaments_table.setItem(
-                row, 5, QTableWidgetItem(str(tournament.get('players_count', '')))
+                row, 5, QTableWidgetItem(str(tournament.get('knockouts_x10', 0)))
             )
             
             # Дата
             start_time = tournament.get('start_time', '')
             self.tournaments_table.setItem(
                 row, 6, QTableWidgetItem(str(start_time))
-            )
-            
-    def load_all_knockouts(self):
-        """
-        Загружает список всех накаутов.
-        """
-        if not self.stats_db:
-            return
-            
-        try:
-            # Получаем все накауты
-            self.db_manager.cursor.execute(
-                "SELECT * FROM knockouts ORDER BY id DESC"
-            )
-            knockouts = self.db_manager.cursor.fetchall()
-            
-            # Отображаем накауты в таблице
-            self._update_knockouts_table(knockouts)
-            
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Ошибка",
-                f"Не удалось загрузить накауты: {str(e)}"
-            )
-            
-    def load_session_knockouts(self, session_id):
-        """
-        Загружает список накаутов конкретной сессии.
-        
-        Args:
-            session_id: ID сессии
-        """
-        if not self.stats_db:
-            return
-            
-        try:
-            # Получаем накауты сессии
-            knockouts = self.stats_db.get_session_knockouts(session_id)
-            
-            # Отображаем накауты в таблице
-            self._update_knockouts_table(knockouts)
-            
-        except Exception as e:
-            QMessageBox.critical(
-                self,
-                "Ошибка",
-                f"Не удалось загрузить накауты сессии: {str(e)}"
-            )
-            
-    def _update_knockouts_table(self, knockouts):
-        """
-        Обновляет таблицу накаутов.
-        
-        Args:
-            knockouts: Список накаутов
-        """
-        # Очищаем таблицу
-        self.knockouts_table.setRowCount(0)
-        
-        # Заполняем таблицу
-        for row, knockout in enumerate(knockouts):
-            self.knockouts_table.insertRow(row)
-            
-            # ID турнира
-            self.knockouts_table.setItem(
-                row, 0, QTableWidgetItem(str(knockout['tournament_id']))
-            )
-            
-            # ID раздачи
-            self.knockouts_table.setItem(
-                row, 1, QTableWidgetItem(str(knockout.get('hand_id', '')))
-            )
-            
-            # Игрок
-            self.knockouts_table.setItem(
-                row, 2, QTableWidgetItem(knockout.get('knocked_out_player', ''))
-            )
-            
-            # Размер банка
-            self.knockouts_table.setItem(
-                row, 3, QTableWidgetItem(str(knockout.get('pot_size', '')))
-            )
-            
-            # Дележка
-            self.knockouts_table.setItem(
-                row, 4, QTableWidgetItem('Да' if knockout.get('multi_knockout') else 'Нет')
             )
             
     def clear_all_data(self):
@@ -1137,7 +1048,6 @@ class MainWindow(QMainWindow):
                 
                 # Очищаем таблицы
                 self.tournaments_table.setRowCount(0)
-                self.knockouts_table.setRowCount(0)
                 
                 # Отображаем сообщение
                 self.status_bar.showMessage("Все данные успешно очищены")
@@ -1148,19 +1058,6 @@ class MainWindow(QMainWindow):
                     f"Не удалось очистить данные: {str(e)}"
                 )
                 
-    def show_about_dialog(self):
-        """
-        Показывает диалог "О программе".
-        """
-        QMessageBox.about(
-            self,
-            "О программе",
-            "<h1>ROYAL_Stats</h1>"
-            "<p>Покерный трекер для анализа результатов турниров.</p>"
-            "<p>Версия: 1.0</p>"
-            "<p>© 2025 Royal Team</p>"
-        )
-        
     def closeEvent(self, event):
         """
         Обработчик закрытия окна приложения.

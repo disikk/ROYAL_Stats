@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """tournament_summary.py
 
-Полноценный парсер Tournament Summary‑файлов (GG/ПокерОК и схожих)
+Полноценный парсер Tournament Summary‑файлов (GG/ПокерОК и схожих)
 ===================================================================
 
-• Поддерживает несколько распространённых форматов GG Poker (2023–2025).
-• Корректно учитывает фикс‑пэйауты за 1‑3 место (4/3/2 бай‑ина) при
-  вычислении крупного баунти (х10, х100, х1000, х10000).
+• Поддерживает несколько распространённых форматов GG Poker (2023–2025).
+• Корректно учитывает фикс‑пэйауты за 1-3 место (4/3/2 бай‑ина) при
+  вычислении крупного баунти (х2, х10, х100, х1000, х10000).
 • Не требует внешних зависимостей, но при наличии *python‑dateutil*
   использует его для парсинга дат (проигрываем элегантно).
 • Никаких «TODO»; весь функционал реализован.
@@ -18,7 +18,7 @@
 >>> result = ts.parse_file(path_to_file)
 >>> print(result.knockouts_x100)
 
-Автор: ChatGPT‑o3 (май 2025).
+Автор: ChatGPT‑o3 (май 2025).
 """
 from __future__ import annotations
 
@@ -43,11 +43,12 @@ class TournamentSummary:  # pylint: disable=too-many-instance-attributes
     hero_name: str
 
     start_time: Optional[datetime]
-    finish_place: int  # 1 = победа, …
+    finish_place: int  # 1 = победа, …
 
     prize_total: float  # полный выплат + баунти
-    bounty_total: float  # prize_total − base_payout(1–3‑е места)
+    bounty_total: float  # prize_total − base_payout(1–3‑е места)
 
+    knockouts_x2: int = 0
     knockouts_x10: int = 0
     knockouts_x100: int = 0
     knockouts_x1000: int = 0
@@ -65,7 +66,7 @@ class TournamentSummary:  # pylint: disable=too-many-instance-attributes
     @property
     def normalized_finish_place(self) -> int:
         """Место, нормированное к диапазону 1–9 (требование ТЗ)."""
-        # ceil(place / players * 9)
+        # ceil(place / players * 9)
         from math import ceil
 
         return min(max(ceil(self.finish_place / self.players * 9), 1), 9)
@@ -117,7 +118,7 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
         players = self._search_int(self._PLAYERS_RE, text, default=9)
         start_time = self._search_datetime(self._START_RE, text)
 
-        # Hero section ── на GG бывает блок вида «25th : Hero … $16.37»
+        # Hero section ── на GG бывает блок вида «25th : Hero … $16.37»
         hero_block_match = None
         for match in re.finditer(
             rf"(?P<place>\d+)(?:st|nd|rd|th) :\s*{re.escape(self.hero_name)}[\s\S]*?\$(?P<prize>[\d,.]+)",
@@ -126,7 +127,7 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
             hero_block_match = match  # берём последний (финальный) блок
 
         if hero_block_match is None:
-            # fallback – взять первый встреченный «X place … $Y»
+            # fallback – взять первый встреченный «X place … $Y»
             hero_block_match = self._FINISH_RE.search(text)
         if hero_block_match is None:
             raise ValueError("Cannot locate Hero finish block in TS file")
@@ -141,7 +142,7 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
         bounty_total = max(prize_total - base_payout, 0.0)
 
         # Считаем крупные нокауты
-        k10, k100, k1k, k10k = self._calculate_large_knockouts(bounty_total, buy_in)
+        k2, k10, k100, k1k, k10k = self._calculate_large_knockouts(bounty_total, buy_in, players)
 
         return TournamentSummary(
             tournament_id=tournament_id,
@@ -152,6 +153,7 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
             finish_place=finish_place,
             prize_total=prize_total,
             bounty_total=bounty_total,
+            knockouts_x2=k2,
             knockouts_x10=k10,
             knockouts_x100=k100,
             knockouts_x1000=k1k,
@@ -214,26 +216,27 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
     # .................................................................
 
     @staticmethod
-    def _calculate_large_knockouts(bounty: float, buy_in: float) -> tuple[int, int, int, int]:
-        """Возвращает количество нокаутов х10, х100, х1000, х10000.
+    def _calculate_large_knockouts(bounty: float, buy_in: float, players: int = 9) -> tuple[int, int, int, int, int]:
+        """Возвращает количество нокаутов х2, х10, х100, х1000, х10000.
 
         Алгоритм: начинаем с самого крупного (10k) и по убыванию; каждая
         «выкупленная» категория вычитается из *bounty*.
-        Макс. нокаутов любого класса за турнир — 8 (9 игроков − Hero).
+        Макс. нокаутов любого класса за турнир — (игроков - 1).
         """
 
         def _extract(cnt_bounty: float, multiplier: int) -> tuple[int, float]:
             one_price = buy_in * multiplier
             if one_price == 0:
                 return 0, cnt_bounty
-            qty = min(int(cnt_bounty // one_price), 8)
+            qty = min(int(cnt_bounty // one_price), players - 1)
             return qty, cnt_bounty - qty * one_price
 
         x10k, remainder = _extract(bounty, 10_000)
         x1k, remainder = _extract(remainder, 1_000)
         x100, remainder = _extract(remainder, 100)
-        x10, _ = _extract(remainder, 10)
-        return x10, x100, x1k, x10k
+        x10, remainder = _extract(remainder, 10)
+        x2, _ = _extract(remainder, 2)
+        return x2, x10, x100, x1k, x10k
 
     # ------------------------------------------------------------------
 
