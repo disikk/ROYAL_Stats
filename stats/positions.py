@@ -68,13 +68,28 @@ class PositionsAnalyzer:
             # Используем players_count из турнира, по умолчанию 9, если NULL или 0
             players_count = row['players_count'] if row['players_count'] and row['players_count'] > 0 else 9 
             
-            if place is None: # Пропускаем, если место неизвестно (хотя WHERE должен это отфильтровать)
+            if place is None or place < 1: # Пропускаем, если место неизвестно или некорректно
                 continue
 
-            # Нормализуем место к 9-max формату
-            # Формула: ceil(place / players_count * 9)
-            # Результат должен быть в диапазоне [1, 9]
-            normalized_place = min(max(ceil(place / players_count * 9.0), 1), 9) # Используем 9.0 для float division
+            # ИСПРАВЛЕНА ФОРМУЛА НОРМАЛИЗАЦИИ МЕСТ - главная ошибка проекта
+            # Вместо ceil(place / players_count * 9) используем прямолинейную нормализацию
+            if place <= players_count:
+                # Расчет нормализованного места по формуле:
+                # (place - 1) * 8 / (players_count - 1) + 1 для линейного масштабирования диапазона [1, players_count] в [1, 9]
+                # Если place=1, то получается 1 место (первое)
+                # Если place=players_count, то получается 9 место (последнее)
+                if players_count > 1:  # Защита от деления на ноль
+                    normalized_place = round((place - 1) * 8 / (players_count - 1) + 1)
+                else:
+                    normalized_place = 1  # Если только один игрок, то он на первом месте
+                
+                # Гарантируем, что место находится в диапазоне [1, 9]
+                normalized_place = max(1, min(9, normalized_place))
+            else:
+                # Если place > players_count (что не должно происходить, но на всякий случай),
+                # устанавливаем последнее место (9)
+                normalized_place = 9
+                
             normalized_places_counts[normalized_place] += 1
             
         return normalized_places_counts
@@ -485,4 +500,3 @@ def get_average_position(db_manager, session_id=None):
 def get_top_positions_count(db_manager, session_id=None):
     analyzer = PositionsAnalyzer(db_manager)
     return analyzer.get_top_positions_count(session_id)
-

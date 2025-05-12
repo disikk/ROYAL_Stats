@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS tournaments (
     knockouts_x1000 INTEGER,
     knockouts_x10000 INTEGER,
     session_id TEXT,
+    average_initial_stack REAL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS statistics (
     second_places INTEGER DEFAULT 0,
     third_places INTEGER DEFAULT 0,
     total_prize REAL DEFAULT 0,
+    avg_initial_stack REAL DEFAULT 0,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -88,6 +90,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     knockouts_count INTEGER DEFAULT 0,
     avg_finish_place REAL DEFAULT 0,
     total_prize REAL DEFAULT 0,
+    avg_initial_stack REAL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -108,8 +111,9 @@ INSERT_TOURNAMENT = """
 INSERT INTO tournaments (
     tournament_id, tournament_name, game_type, buy_in, fee, bounty,
     total_buy_in, players_count, prize_pool, start_time, finish_place, prize,
-    knockouts_x2, knockouts_x10, knockouts_x100, knockouts_x1000, knockouts_x10000, session_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    knockouts_x2, knockouts_x10, knockouts_x100, knockouts_x1000, knockouts_x10000, 
+    session_id, average_initial_stack
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Вставка информации о накауте
@@ -134,6 +138,7 @@ UPDATE statistics SET
     second_places = ?,
     third_places = ?,
     total_prize = ?,
+    avg_initial_stack = ?,
     last_updated = CURRENT_TIMESTAMP
 WHERE id = 1
 """
@@ -155,8 +160,8 @@ ON CONFLICT(place) DO UPDATE SET
 INSERT_SESSION = """
 INSERT INTO sessions (
     session_id, session_name, tournaments_count, knockouts_count,
-    avg_finish_place, total_prize
-) VALUES (?, ?, ?, ?, ?, ?)
+    avg_finish_place, total_prize, avg_initial_stack
+) VALUES (?, ?, ?, ?, ?, ?, ?)
 """
 
 # SQL-запросы для получения данных
@@ -231,6 +236,7 @@ UPDATE statistics SET
     second_places = 0,
     third_places = 0,
     total_prize = 0,
+    avg_initial_stack = 0,
     last_updated = CURRENT_TIMESTAMP
 WHERE id = 1;
 """

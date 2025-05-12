@@ -10,8 +10,13 @@
 
 import re
 import os
+import logging
 from pathlib import Path
 from typing import Dict, List, Set, Tuple, Optional
+
+
+# Настройка логирования
+logger = logging.getLogger('ROYAL_Stats.HandHistory')
 
 
 class Pot:
@@ -89,19 +94,39 @@ class HandHistoryParser:
             'tournament_id': None,
             'hands_count': 0,
             'knockouts': [],  # Список накаутов Hero
-            'hands': []       # Детальная информация по раздачам
+            'hands': [],      # Детальная информация по раздачам
+            'average_initial_stack': 0  # Добавлено новое поле для среднего начального стека
         }
         
         # Извлекаем ID турнира из файла
-        with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
-            content = file.read()
-            tournament_match = self.re_tournament_id.search(content)
-            if tournament_match:
-                result['tournament_id'] = tournament_match.group(1)
+        try:
+            with open(file_path, 'r', encoding='utf-8', errors='ignore') as file:
+                content = file.read()
+                tournament_match = self.re_tournament_id.search(content)
+                if tournament_match:
+                    result['tournament_id'] = tournament_match.group(1)
+                    logger.debug(f"Найден ID турнира: {result['tournament_id']}")
+        except Exception as e:
+            logger.error(f"Ошибка при чтении файла {file_path}: {e}", exc_info=True)
+            raise
         
         # Анализируем раздачи с помощью алгоритма экспертов
-        hands = self._parse_file(Path(file_path))
-        result['hands_count'] = len(hands)
+        try:
+            hands = self._parse_file(Path(file_path))
+            result['hands_count'] = len(hands)
+            logger.debug(f"Найдено {len(hands)} раздач в файле {file_path}")
+            
+            # Рассчитываем средний начальный стек на основе первой раздачи
+            if hands and hands[0].seats:
+                # Берем стеки всех игроков из первой раздачи
+                initial_stacks = [stack for stack in hands[0].seats.values()]
+                if initial_stacks:
+                    result['average_initial_stack'] = sum(initial_stacks) / len(initial_stacks)
+                    logger.debug(f"Средний начальный стек в турнире: {result['average_initial_stack']}")
+        except Exception as e:
+            logger.error(f"Ошибка при парсинге раздач в файле {file_path}: {e}", exc_info=True)
+            # Возвращаем частичный результат в случае ошибки
+            return result
         
         # Для каждой раздачи определяем, были ли накауты
         for idx, hand in enumerate(hands):
@@ -374,7 +399,7 @@ class HandHistoryParser:
         Returns:
             Количество накаутов
         """
-        if not eliminated:
+        if not eliminated or hero not in hand.collects or hand.collects[hero] <= 0:
             return 0
             
         # Сопоставляем выбывшего игрока с банком
@@ -419,7 +444,7 @@ class HandHistoryParser:
                 result = self.parse_file(file_path)
                 all_knockouts.extend(result.get('knockouts', []))
             except Exception as e:
-                print(f"Ошибка при парсинге файла {file_path}: {e}")
+                logger.error(f"Ошибка при парсинге файла {file_path}: {e}", exc_info=True)
                 
         return all_knockouts
 
@@ -440,6 +465,7 @@ if __name__ == "__main__":
         result = parser.parse_file(file_path)
         print(f"Турнир ID: {result['tournament_id']}")
         print(f"Количество раздач: {result['hands_count']}")
+        print(f"Средний начальный стек: {result['average_initial_stack']}")
         print(f"Количество накаутов: {len(result['knockouts'])}")
         
         for knockout in result['knockouts']:

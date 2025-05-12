@@ -74,12 +74,17 @@ class TournamentSummary:  # pylint: disable=too-many-instance-attributes
     @property
     def normalized_finish_place(self) -> int:
         """Место, нормированное к диапазону 1–9 (требование ТЗ)."""
-        # ceil(place / players * 9)
-        from math import ceil
-
-        if self.players == 0: # Защита от деления на ноль, если players все же 0
-            return 9 # Худшее место по умолчанию
-        return min(max(ceil(self.finish_place / self.players * 9.0), 1), 9) # Используем 9.0 для float division
+        # Исправленная формула нормализации
+        if self.players <= 1:
+            return 1  # Если только один игрок, то он на первом месте
+        
+        # Линейная нормализация в диапазон [1,9]
+        # Если place=1, то получится 1 место (первое)
+        # Если place=players_count, то получится 9 место (последнее)
+        normalized = round((self.finish_place - 1) * 8 / (self.players - 1) + 1)
+        
+        # Ограничиваем значение диапазоном [1, 9]
+        return max(1, min(9, normalized))
 
     # класс хорошо сериализуется через dataclasses.asdict
 
@@ -184,7 +189,7 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
         base_payout = self._compute_base_payout(finish_place, buy_in)
         bounty_total = max(prize_total - base_payout, 0.0)
 
-        # Считаем крупные нокауты
+        # Считаем крупные нокауты - ИСПРАВЛЕНО
         k2, k10, k100, k1k, k10k = self._calculate_large_knockouts(bounty_total, buy_in, players)
 
         try:
@@ -291,28 +296,82 @@ class TournamentSummaryParser:  # pylint: disable=too-many-public-methods
         «выкупленная» категория вычитается из *bounty*.
         Макс. нокаутов любого класса за турнир — (игроков - 1).
         """
-        # Гарантируем, что players не меньше 1, чтобы players - 1 было не отрицательным
+        # ИСПРАВЛЕНО: Гарантируем, что players не меньше 1, чтобы players - 1 было не отрицательным
         # Это важно, если players было установлено в 0 или меньше по какой-то причине
         # (хотя основная логика парсинга должна это предотвращать).
         max_possible_kos = max(0, players - 1)
 
+        # ИСПРАВЛЕНО: проверка чтобы не было деления на ноль
+        if buy_in <= 0:
+            return 0, 0, 0, 0, 0  # Если buy-in 0 или отрицателен, нокауты невозможны
 
-        def _extract(cnt_bounty: float, multiplier: int) -> tuple[int, float]:
-            if buy_in <= 0: # Если бай-ин 0 или отрицательный, нокауты невозможны
-                return 0, cnt_bounty
+        # Проверка на случай, если bounty слишком мал
+        if bounty < 2 * buy_in:
+            return 0, 0, 0, 0, 0  # Нет даже x2 нокаутов
+
+        # ИСПРАВЛЕНО: алгоритм расчета нокаутов
+        def _extract(remaining_bounty: float, multiplier: int) -> tuple[int, float]:
+            # Цена одного нокаута данного типа
             one_price = buy_in * multiplier
-            if one_price == 0: # Избегаем деления на ноль, если buy_in * multiplier = 0
-                return 0, cnt_bounty
             
-            # Количество нокаутов не может быть больше, чем (количество игроков - 1)
-            qty = min(int(cnt_bounty // one_price), max_possible_kos)
-            return qty, cnt_bounty - qty * one_price
+            # Если цена нокаута 0, нет смысла его считать
+            if one_price <= 0:
+                return 0, remaining_bounty
+                
+            # Количество нокаутов этого типа (с учетом максимально возможного)
+            qty = min(int(remaining_bounty // one_price), max_possible_kos)
+            
+            # Вычитаем стоимость всех нокаутов из оставшегося баунти
+            new_remaining = remaining_bounty - qty * one_price
+            
+            # Может быть потеря точности при делении, проверяем остаток
+            if new_remaining < 0:
+                new_remaining = 0.0
+            
+            return qty, new_remaining
 
+        # Начинаем считать с самых больших нокаутов
         x10k, remainder = _extract(bounty, 10_000)
         x1k, remainder = _extract(remainder, 1_000)
         x100, remainder = _extract(remainder, 100)
         x10, remainder = _extract(remainder, 10)
-        x2, _ = _extract(remainder, 2) # Остаток от x2 нас не интересует для других категорий
+        x2, _ = _extract(remainder, 2)  # Остаток от x2 нас не интересует для других категорий
+        
+        # ИСПРАВЛЕНО: проверяем ограничение на максимальное количество нокаутов
+        total_kos = x10k + x1k + x100 + x10 + x2
+        if total_kos > max_possible_kos:
+            # Если сумма всех нокаутов превышает возможное количество, корректируем
+            # Начинаем с самых маленьких множителей
+            excess = total_kos - max_possible_kos
+            
+            if excess > 0 and x2 > 0:
+                reduction = min(excess, x2)
+                x2 -= reduction
+                excess -= reduction
+                
+            if excess > 0 and x10 > 0:
+                reduction = min(excess, x10)
+                x10 -= reduction
+                excess -= reduction
+                
+            if excess > 0 and x100 > 0:
+                reduction = min(excess, x100)
+                x100 -= reduction
+                excess -= reduction
+                
+            if excess > 0 and x1k > 0:
+                reduction = min(excess, x1k)
+                x1k -= reduction
+                excess -= reduction
+                
+            if excess > 0 and x10k > 0:
+                reduction = min(excess, x10k)
+                x10k -= reduction
+                # excess -= reduction  # Не используется больше
+        
+        logger.debug(f"Рассчитаны нокауты: bounty={bounty}, buy_in={buy_in}, players={players}, "
+                     f"нокауты: x2={x2}, x10={x10}, x100={x100}, x1k={x1k}, x10k={x10k}")
+                
         return x2, x10, x100, x1k, x10k
 
     # ------------------------------------------------------------------

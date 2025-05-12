@@ -98,16 +98,7 @@ class PlaceDistributionChart(QWidget):
         # Создаем layout
         layout = QVBoxLayout(self)
         
-        # Заголовок
-        title_label = QLabel("Распределение мест")
-        title_font = QFont()
-        title_font.setBold(True)
-        title_font.setPointSize(12) # Немного уменьшим для общей компактности
-        title_label.setFont(title_font)
-        title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title_label.setStyleSheet("color: #343a40; margin-bottom: 8px;") # Уменьшен margin
-        
-        # Создаем фрейм для графика
+        # Создаем фрейм для графика (без лишнего заголовка)
         chart_frame = QFrame()
         chart_frame.setFrameShape(QFrame.Shape.StyledPanel)
         chart_frame.setFrameShadow(QFrame.Shadow.Raised)
@@ -126,8 +117,7 @@ class PlaceDistributionChart(QWidget):
         self.canvas = FigureCanvas(self.figure)
         chart_layout.addWidget(self.canvas)
         
-        # Добавляем виджеты на layout
-        layout.addWidget(title_label)
+        # Добавляем виджеты на layout (только фрейм с графиком, без лишнего заголовка)
         layout.addWidget(chart_frame)
         
         # Начальные данные для гистограммы
@@ -379,17 +369,20 @@ class StatsGrid(QWidget):
         
         self.cards['total_tournaments'] = StatsCard("Всего турниров", "0", value_color="#0d6efd")
         self.cards['avg_finish_place'] = StatsCard("Среднее место", "0.00", value_color="#fd7e14")
+        self.cards['avg_initial_stack'] = StatsCard("Средний стек", "0", value_color="#20c997")  # Новая карточка
         self.cards['first_places'] = StatsCard("Первых мест", "0", value_color="#198754")
         self.cards['second_places'] = StatsCard("Вторых мест", "0", value_color="#0dcaf0")
         self.cards['third_places'] = StatsCard("Третьих мест", "0", value_color="#6f42c1")
         self.cards['total_prize'] = StatsCard("Общий выигрыш", "$0.00", value_color="#dc3545")
         
+        # Изменена сетка для размещения новой карточки
         tournaments_layout.addWidget(self.cards['total_tournaments'], 0, 0)
         tournaments_layout.addWidget(self.cards['avg_finish_place'], 0, 1)
-        tournaments_layout.addWidget(self.cards['total_prize'], 0, 2) # Перенес сюда для лучшего вида
+        tournaments_layout.addWidget(self.cards['avg_initial_stack'], 0, 2)  # Новая карточка
         tournaments_layout.addWidget(self.cards['first_places'], 1, 0)
         tournaments_layout.addWidget(self.cards['second_places'], 1, 1)
         tournaments_layout.addWidget(self.cards['third_places'], 1, 2)
+        tournaments_layout.addWidget(self.cards['total_prize'], 2, 0, 1, 3)  # Растянута на 3 колонки
         
         tournaments_group.setLayout(tournaments_layout)
         
@@ -431,6 +424,15 @@ class StatsGrid(QWidget):
             self.cards['avg_finish_place'].set_value(f"{avg_finish_place_float:.2f}")
         except (ValueError, TypeError):
             self.cards['avg_finish_place'].set_value("0.00") # Значение по умолчанию, если не число
+            
+        # Обновляем средний начальный стек
+        avg_initial_stack = stats.get('avg_initial_stack', 0.0)
+        try:
+            avg_initial_stack_float = float(avg_initial_stack)
+            # Округляем до целого числа для более удобного отображения
+            self.cards['avg_initial_stack'].set_value(f"{int(avg_initial_stack_float)}")
+        except (ValueError, TypeError):
+            self.cards['avg_initial_stack'].set_value("0") # Значение по умолчанию, если не число
 
         self.cards['first_places'].set_value(format_number(stats.get('first_places', 0)))
         self.cards['second_places'].set_value(format_number(stats.get('second_places', 0)))

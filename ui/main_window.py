@@ -2,11 +2,26 @@
 # -*- coding: utf-8 -*-
 
 """
-Главное окно покерного трекера ROYAL_Stats.
+ROYAL_Stats - Покерный трекер для анализа статистики игрока
+
+Основной модуль запуска приложения.
+Инициализирует графический интерфейс и запускает главное окно приложения.
+
+Функциональность:
+1. Подсчет нокаутов (когда Hero выбил другого игрока)
+2. Подсчет среднего места, с которого игрок вылетел (1-9)
+3. Подсчет количества x10, x100, x1000, x10000 нокаутов
+4. Построение гистограммы распределения позиций
+5. Сохранение и обновление статистики в базе данных
+6. Управление несколькими базами данных
+
+Автор: Royal Team
+Версия: 1.0
+Дата: 2025
 """
 
+import sys
 import os
-import uuid
 import logging
 import re
 import sqlite3 
@@ -40,9 +55,10 @@ class WorkerSignals(QObject):
     """
     started = pyqtSignal()
     finished = pyqtSignal()
-    progress = pyqtSignal(int)
+    progress = pyqtSignal(int, int)  # Добавлен второй параметр для общего количества
     error = pyqtSignal(str)
     result = pyqtSignal(object)
+    cancel = pyqtSignal()  # Новый сигнал для отмены операции
 
 
 class Worker(QRunnable):
@@ -57,6 +73,7 @@ class Worker(QRunnable):
         self.args = args
         self.kwargs = kwargs 
         self.signals = WorkerSignals()
+        self.is_cancelled = False  # Флаг отмены операции
         
         self.worker_logger = logging.getLogger('ROYAL_Stats.Worker') 
         
@@ -71,11 +88,15 @@ class Worker(QRunnable):
             
             current_kwargs = self.kwargs.copy()
             current_kwargs['worker_signals'] = self.signals
+            current_kwargs['is_cancelled'] = lambda: self.is_cancelled  # Добавляем проверку на отмену
             
             result = self.fn(*self.args, **current_kwargs)
             
-            self.signals.result.emit(result)
-            self.worker_logger.debug(f"Worker успешно выполнил функцию {self.fn.__name__}")
+            if not self.is_cancelled:
+                self.signals.result.emit(result)
+                self.worker_logger.debug(f"Worker успешно выполнил функцию {self.fn.__name__}")
+            else:
+                self.worker_logger.debug(f"Worker был отменен для функции {self.fn.__name__}")
             
         except Exception as e:
             self.worker_logger.error(f"Ошибка в Worker при выполнении {self.fn.__name__}: {str(e)}", 
@@ -85,6 +106,15 @@ class Worker(QRunnable):
         finally:
             self.signals.finished.emit()
             self.worker_logger.debug(f"Worker завершил выполнение функции {self.fn.__name__}")
+    
+    def cancel(self):
+        """
+        Отмена выполнения задачи.
+        """
+        self.is_cancelled = True
+        self.signals.cancel.emit()  # Отправляем сигнал об отмене
+        self.worker_logger.debug(f"Запрошена отмена для функции {self.fn.__name__}")
+
 
 class MainWindow(QMainWindow):
     """
@@ -105,6 +135,7 @@ class MainWindow(QMainWindow):
         
         self.current_session_id = None
         self.current_db_path = None 
+        self.current_worker = None  # Для хранения ссылки на текущий Worker
         
         self._init_ui()
         self.show_database_dialog()
@@ -180,9 +211,26 @@ class MainWindow(QMainWindow):
         splitter.setSizes([250, 950])
         main_layout.addWidget(splitter)
         
+        # Добавляем контейнер для прогресс-бара и метки прогресса
+        progress_container = QVBoxLayout()
+        
         self.progress_bar = QProgressBar()
         self.progress_bar.setVisible(False)
-        main_layout.addWidget(self.progress_bar)
+        progress_container.addWidget(self.progress_bar)
+        
+        # Добавляем метку для отображения статуса обработки файлов
+        self.progress_label = QLabel("")
+        self.progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.progress_label.setVisible(False)
+        progress_container.addWidget(self.progress_label)
+        
+        # Добавляем кнопку отмены загрузки
+        self.cancel_button = QPushButton("Отменить загрузку")
+        self.cancel_button.clicked.connect(self.cancel_loading)
+        self.cancel_button.setVisible(False)
+        progress_container.addWidget(self.cancel_button)
+        
+        main_layout.addLayout(progress_container)
         
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
@@ -233,6 +281,14 @@ class MainWindow(QMainWindow):
         clear_data_action = QAction("Очистить все данные", self)
         clear_data_action.triggered.connect(self.clear_all_data)
         tools_menu.addAction(clear_data_action)
+        
+    def cancel_loading(self):
+        """
+        Отменяет текущую операцию загрузки файлов.
+        """
+        if self.current_worker:
+            self.current_worker.cancel()
+            self.status_bar.showMessage("Загрузка отменена пользователем", 5000)
         
     def show_database_dialog(self):
         """
@@ -444,18 +500,23 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Сначала выберите базу данных!")
             return
             
+        # Создаем диалог выбора файлов и папок
         dialog = QFileDialog(self)
-        dialog.setFileMode(QFileDialog.FileMode.ExistingFiles) 
-        dialog.setOption(QFileDialog.Option.ShowDirsOnly, False)
-        dialog.setWindowTitle("Выберите файлы или папки с историей")
-        dialog.setNameFilter("Текстовые файлы (*.txt);;Все файлы (*)")
-
+        dialog.setFileMode(QFileDialog.FileMode.Directory)  # Устанавливаем режим выбора директории
+        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)  # Показываем только директории
+        dialog.setWindowTitle("Выберите папку с файлами истории")
+        
+        # Добавляем опцию для выбора файлов
+        files_button = QPushButton("Выбрать файлы", dialog)
+        files_button.clicked.connect(lambda: dialog.setFileMode(QFileDialog.FileMode.ExistingFiles))
+        dialog.layout().addWidget(files_button)
 
         file_paths_to_process = []
         if dialog.exec():
             selected_items = dialog.selectedFiles()
             for item_path in selected_items:
                 if os.path.isdir(item_path):
+                    # Рекурсивно обходим папку и ищем все .txt файлы
                     for root, _, files in os.walk(item_path):
                         for file in files:
                             if file.endswith('.txt'): 
@@ -472,23 +533,42 @@ class MainWindow(QMainWindow):
             if not session_id_for_processing: 
                 return
         
+        # Настраиваем прогресс-бар и связанные элементы
         self.progress_bar.setVisible(True)
         self.progress_bar.setMaximum(len(file_paths_to_process)) 
         self.progress_bar.setValue(0)
         
+        self.progress_label.setText(f"Обработано 0 из {len(file_paths_to_process)} файлов")
+        self.progress_label.setVisible(True)
+        
+        self.cancel_button.setVisible(True)
         self.load_files_button.setEnabled(False)
         
+        # Создаем и запускаем Worker
         worker = Worker(self._process_files_worker, file_paths_to_process, session_id_for_processing)
+        self.current_worker = worker  # Сохраняем ссылку на текущий Worker
         
         worker.signals.started.connect(lambda: self.status_bar.showMessage("Обработка файлов началась..."))
         worker.signals.finished.connect(self.on_files_processing_finished)
         worker.signals.error.connect(self.on_files_processing_error)
         worker.signals.result.connect(self.on_files_processing_result)
-        worker.signals.progress.connect(self.progress_bar.setValue) 
         
+        # Обновляем обработчик прогресса для поддержки двух параметров (текущий и общий)
+        worker.signals.progress.connect(self.update_progress) 
+        
+        # Запускаем Worker
         self.threadpool.start(worker)
         
-    def _process_files_worker(self, file_paths: List[str], session_id: str, worker_signals: WorkerSignals):
+    def update_progress(self, value, total):
+        """
+        Обновляет прогресс-бар и метку прогресса.
+        """
+        if self.progress_bar.isVisible():
+            self.progress_bar.setValue(value)
+            self.progress_label.setText(f"Обработано {value} из {total} файлов")
+        
+    def _process_files_worker(self, file_paths: List[str], session_id: str, 
+                             worker_signals: WorkerSignals, is_cancelled: callable):
         """
         Функция для обработки файлов в отдельном потоке.
         """
@@ -510,7 +590,8 @@ class MainWindow(QMainWindow):
             
             results = self.process_files(file_paths, session_id, 
                                          stats_db_instance=worker_stats_db, 
-                                         progress_signal=worker_signals.progress)
+                                         progress_signal=worker_signals.progress,
+                                         is_cancelled=is_cancelled)
             worker_logger.debug(f"Worker processing finished. Results: {results}")
             return results
         except Exception as e:
@@ -524,9 +605,21 @@ class MainWindow(QMainWindow):
 
         
     def process_files(self, file_paths: List[str], session_id: str, 
-                      stats_db_instance: StatsDatabase, progress_signal: Optional[pyqtSignal] = None):
+                      stats_db_instance: StatsDatabase, 
+                      progress_signal: Optional[pyqtSignal] = None,
+                      is_cancelled: callable = None):
         """
         Обрабатывает файлы истории рук и сводки турниров.
+        
+        Args:
+            file_paths: Список путей к файлам
+            session_id: ID сессии загрузки
+            stats_db_instance: Экземпляр StatsDatabase
+            progress_signal: Сигнал для обновления прогресса
+            is_cancelled: Функция проверки отмены операции
+            
+        Returns:
+            Словарь с результатами обработки
         """
         current_stats_db = stats_db_instance 
 
@@ -538,36 +631,61 @@ class MainWindow(QMainWindow):
         hand_history_files = []
         tournament_summary_files = []
         
-        progress_value = 0
+        total_files = len(file_paths)
+        processed_files = 0
         
+        # Первый проход: определяем типы файлов
         for file_path in file_paths:
+            if is_cancelled and is_cancelled():
+                return {'cancelled': True, 'processed_files': processed_files, 'total_files': total_files}
+                
             file_name = os.path.basename(file_path)
             
-            if '9max' in file_name.lower() and file_name.endswith('.txt'): 
-                hand_history_files.append(file_path)
-            elif 'tournament #' in file_name.lower() and 'mystery battle royale' in file_name.lower() and file_name.endswith('.txt'):
-                tournament_summary_files.append(file_path)
-            # else:
-            #     logger.info(f"Файл {file_name} не соответствует известным шаблонам и будет пропущен.")
-
-            progress_value += 1
+            # Проверяем содержимое файла для более точного определения
+            try:
+                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read(2000)  # Читаем первые 2000 байт для определения типа
+                    
+                    # Улучшенное определение файлов tournament summary
+                    if ('Tournament #' in content and 
+                        ('Buy' in content or 'buy' in content.lower()) and 
+                        (any(marker in content for marker in ['place', 'st place', 'nd place', 'rd place', 'th place']))):
+                        tournament_summary_files.append(file_path)
+                        logger.debug(f"Определен файл сводки турнира: {file_path}")
+                    # Улучшенное определение файлов hand history - не только по '9max' в имени
+                    elif ('Hand #' in content or 'Poker Hand #' in content or 
+                          'Table' in content and 'Seat' in content or
+                          '9max' in file_name.lower()):  # Сохраняем поддержку старого формата имени
+                        hand_history_files.append(file_path)
+                        logger.debug(f"Определен файл истории рук: {file_path}")
+                    else:
+                        logger.info(f"Неопознанный тип файла, пропускаем: {file_path}")
+            except Exception as e:
+                logger.warning(f"Не удалось прочитать файл {file_path}: {str(e)}")
+            
+            processed_files += 1
             if progress_signal:
-                progress_signal.emit(progress_value)
+                progress_signal.emit(processed_files, total_files)
                 
         results = {
-            'total_files': len(file_paths),
+            'total_files': total_files,
             'tournament_summary_files_found': len(tournament_summary_files), 
             'hand_history_files_found': len(hand_history_files),       
             'processed_tournaments': 0,
             'processed_knockouts': 0,
-            'skipped_tournaments_high_finish_place': 0, # Счетчик пропущенных турниров
+            'skipped_tournaments_high_finish_place': 0, 
             'errors': []
         }
         
         logger.info(f"Найдено файлов сводки турниров: {len(tournament_summary_files)}")
         logger.info(f"Найдено файлов истории рук: {len(hand_history_files)}")
 
-        for file_path in tournament_summary_files:
+        # Обрабатываем файлы сводки турниров
+        for idx, file_path in enumerate(tournament_summary_files):
+            if is_cancelled and is_cancelled():
+                results['cancelled'] = True
+                return results
+                
             try:
                 logger.debug(f"Парсинг файла сводки турнира: {file_path}")
                 tournament_data_obj = self.tournament_summary_parser.parse_file(file_path)
@@ -583,41 +701,97 @@ class MainWindow(QMainWindow):
                 else: 
                     data_to_save = tournament_data_obj.__dict__ if hasattr(tournament_data_obj, '__dict__') else dict(tournament_data_obj)
 
+                # Сохраняем информацию о турнире
                 current_stats_db.save_tournament_data(data_to_save, session_id)
                 results['processed_tournaments'] += 1
                 logger.debug(f"Успешно обработан файл сводки: {file_path}")
+                
+                # Обновляем прогресс
+                if progress_signal:
+                    progress_value = len(tournament_summary_files) + idx + 1
+                    progress_signal.emit(progress_value, total_files)
+                    
             except Exception as e:
                 err_msg = f"Ошибка при обработке файла сводки {file_path}: {str(e)}"
                 logger.error(err_msg, exc_info=True)
                 results['errors'].append(err_msg)
+        
+        # Словарь для хранения среднего стека по турнирам
+        tournament_avg_stacks = {}
+        
+        # Обрабатываем файлы истории рук
+        for idx, file_path in enumerate(hand_history_files):
+            if is_cancelled and is_cancelled():
+                results['cancelled'] = True
+                return results
                 
-        for file_path in hand_history_files:
             try:
                 logger.debug(f"Парсинг файла истории рук: {file_path}")
                 hand_history_data = self.hand_history_parser.parse_file(file_path) 
+                
+                # Если есть ID турнира и нокауты
                 if hand_history_data.get('tournament_id') and hand_history_data.get('knockouts'):
-                    # Здесь не нужна проверка finish_place, так как это история рук, а не сводка турнира
+                    # Сохраняем нокауты в базу
                     current_stats_db.save_knockouts_data(
                         hand_history_data['tournament_id'],
                         hand_history_data['knockouts'],
                         session_id
                     )
                     results['processed_knockouts'] += len(hand_history_data['knockouts'])
+                    
+                    # Сохраняем средний начальный стек
+                    tournament_id = hand_history_data['tournament_id']
+                    avg_stack = hand_history_data.get('average_initial_stack', 0)
+                    
+                    # Обновляем средний стек для этого турнира
+                    if avg_stack > 0:
+                        # Обновляем средний стек для турнира в базе данных
+                        try:
+                            # Проверяем, существует ли турнир в базе
+                            self.db_manager.cursor.execute(
+                                "SELECT id FROM tournaments WHERE tournament_id = ? AND session_id = ?",
+                                (tournament_id, session_id)
+                            )
+                            tournament_exists = self.db_manager.cursor.fetchone()
+                            
+                            if tournament_exists:
+                                # Обновляем средний стек для существующего турнира
+                                self.db_manager.cursor.execute(
+                                    "UPDATE tournaments SET average_initial_stack = ? WHERE tournament_id = ? AND session_id = ?",
+                                    (avg_stack, tournament_id, session_id)
+                                )
+                                self.db_manager.connection.commit()
+                                logger.debug(f"Обновлен средний стек ({avg_stack}) для турнира {tournament_id}")
+                            else:
+                                # Сохраняем информацию о среднем стеке для использования при создании турнира позже
+                                tournament_avg_stacks[tournament_id] = avg_stack
+                                logger.debug(f"Сохранен средний стек ({avg_stack}) для будущего турнира {tournament_id}")
+                        except Exception as e:
+                            logger.error(f"Ошибка при обновлении среднего стека для турнира {tournament_id}: {str(e)}", exc_info=True)
+                            
                 logger.debug(f"Успешно обработан файл истории рук: {file_path}")
+                
+                # Обновляем прогресс
+                if progress_signal:
+                    progress_value = idx + 1
+                    progress_signal.emit(progress_value, total_files)
+                    
             except Exception as e:
                 err_msg = f"Ошибка при обработке файла истории рук {file_path}: {str(e)}"
                 logger.error(err_msg, exc_info=True)
                 results['errors'].append(err_msg)
-                
-        try:
-            logger.debug(f"Обновление статистики сессии {session_id}")
-            current_stats_db.update_session_stats(session_id)
-            logger.debug(f"Обновление общей статистики")
-            current_stats_db.update_overall_statistics()
-        except Exception as e:
-            err_msg = f"Ошибка при обновлении статистики после обработки файлов: {str(e)}"
-            logger.error(err_msg, exc_info=True)
-            results['errors'].append(err_msg)
+        
+        # Обновляем статистику только если процесс не был отменен
+        if not (is_cancelled and is_cancelled()):
+            try:
+                logger.debug(f"Обновление статистики сессии {session_id}")
+                current_stats_db.update_session_stats(session_id)
+                logger.debug(f"Обновление общей статистики")
+                current_stats_db.update_overall_statistics()
+            except Exception as e:
+                err_msg = f"Ошибка при обновлении статистики после обработки файлов: {str(e)}"
+                logger.error(err_msg, exc_info=True)
+                results['errors'].append(err_msg)
             
         return results
 
@@ -626,6 +800,10 @@ class MainWindow(QMainWindow):
         if not isinstance(results, dict): 
             logger.error(f"Получен некорректный результат обработки файлов: {results}")
             QMessageBox.critical(self, "Критическая ошибка", "Внутренняя ошибка при обработке файлов.")
+            return
+
+        if results.get('cancelled'):
+            self.status_bar.showMessage("Операция была отменена пользователем", 5000)
             return
 
         if results.get('errors'):
@@ -640,7 +818,7 @@ class MainWindow(QMainWindow):
             f"Найдено файлов сводки: {results.get('tournament_summary_files_found', 0)}\n"
             f"Найдено файлов истории: {results.get('hand_history_files_found', 0)}\n"
             f"Обработано турниров: {results.get('processed_tournaments',0)}\n"
-            f"Пропущено турниров (место >= 10): {results.get('skipped_tournaments_high_finish_place',0)}\n" # Новая строка
+            f"Пропущено турниров (место >= 10): {results.get('skipped_tournaments_high_finish_place',0)}\n"
             f"Обработано нокаутов: {results.get('processed_knockouts',0)}"
         )
         self.status_bar.showMessage(stats_message, 10000) 
@@ -648,7 +826,10 @@ class MainWindow(QMainWindow):
     def on_files_processing_finished(self):
         """ Обработчик завершения обработки файлов. """
         self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+        self.cancel_button.setVisible(False)
         self.load_files_button.setEnabled(True)
+        self.current_worker = None  # Сбрасываем ссылку на Worker
         
         self.load_sessions() 
         
@@ -663,7 +844,10 @@ class MainWindow(QMainWindow):
     def on_files_processing_error(self, error_message: str):
         """ Обработчик ошибки при обработке файлов. """
         self.progress_bar.setVisible(False)
+        self.progress_label.setVisible(False)
+        self.cancel_button.setVisible(False)
         self.load_files_button.setEnabled(True)
+        self.current_worker = None  # Сбрасываем ссылку на Worker
         
         QMessageBox.critical(self, "Ошибка", f"Ошибка при обработке файлов: {error_message}")
         
@@ -681,6 +865,16 @@ class MainWindow(QMainWindow):
         try:
             self.stats_db.update_overall_statistics() 
             stats = self.stats_db.get_overall_statistics()
+            
+            # Проверим наличие ключевых данных в статистике
+            logger.debug(f"Получена общая статистика: {stats}")
+            
+            # Проверяем наличие ключевых полей в статистике для отладки
+            if 'total_knockouts_x10' not in stats:
+                logger.warning("В общей статистике отсутствует ключ 'total_knockouts_x10'")
+            if 'avg_initial_stack' not in stats:
+                logger.warning("В общей статистике отсутствует ключ 'avg_initial_stack'")
+                
             self.stats_grid.update_stats(stats)
             places_distribution = self.stats_db.get_places_distribution()
             self.place_chart.update_chart(places_distribution)
@@ -708,6 +902,7 @@ class MainWindow(QMainWindow):
                 'total_knockouts': session_stats_from_db.get('knockouts_count', 0),
                 'avg_finish_place': session_stats_from_db.get('avg_finish_place', 0.0),
                 'total_prize': session_stats_from_db.get('total_prize', 0.0),
+                'avg_initial_stack': session_stats_from_db.get('avg_initial_stack', 0.0),  # Добавлен средний начальный стек
                 'first_places': 0, 'second_places': 0, 'third_places': 0,
                 'total_knockouts_x2': 0, 'total_knockouts_x10': 0,
                 'total_knockouts_x100': 0, 'total_knockouts_x1000': 0,
@@ -728,16 +923,26 @@ class MainWindow(QMainWindow):
                 # Турниры с местом >= 10 уже не должны попадать в БД.
                 if place and 1 <= place <= 9: 
                     players_count_in_tournament = tournament.get('players_count', 9) or 9 
-                    from math import ceil 
-                    normalized_place = min(max(ceil(place / players_count_in_tournament * 9.0), 1), 9) 
-                    places_distribution_session[normalized_place] +=1
+                    
+                    # Используем исправленную формулу нормализации места
+                    if players_count_in_tournament > 1:
+                        # (place - 1) * 8 / (players_count - 1) + 1 - для линейного масштабирования диапазона [1, players_count] в [1, 9]
+                        # Если place=1, то получается 1 место (первое)
+                        # Если place=players_count, то получается 9 место (последнее)
+                        normalized_place = round((place - 1) * 8 / (players_count_in_tournament - 1) + 1)
+                        # Гарантируем, что место находится в диапазоне [1, 9]
+                        normalized_place = max(1, min(9, normalized_place))
+                    else:
+                        normalized_place = 1
+                        
+                    places_distribution_session[normalized_place] += 1
 
-
-                stats_for_grid['total_knockouts_x2'] += tournament.get('knockouts_x2', 0)
-                stats_for_grid['total_knockouts_x10'] += tournament.get('knockouts_x10', 0)
-                stats_for_grid['total_knockouts_x100'] += tournament.get('knockouts_x100', 0)
-                stats_for_grid['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0)
-                stats_for_grid['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0)
+                # Суммируем нокауты всех типов
+                stats_for_grid['total_knockouts_x2'] += tournament.get('knockouts_x2', 0) or 0
+                stats_for_grid['total_knockouts_x10'] += tournament.get('knockouts_x10', 0) or 0
+                stats_for_grid['total_knockouts_x100'] += tournament.get('knockouts_x100', 0) or 0
+                stats_for_grid['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0) or 0
+                stats_for_grid['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0) or 0
                 
             self.stats_grid.update_stats(stats_for_grid)
             self.place_chart.update_chart(places_distribution_session) 
@@ -859,4 +1064,3 @@ class MainWindow(QMainWindow):
             self.db_manager.close()
             
         event.accept()
-
