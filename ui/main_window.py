@@ -500,33 +500,63 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Предупреждение", "Сначала выберите базу данных!")
             return
             
-        # Создаем диалог выбора файлов и папок
-        dialog = QFileDialog(self)
-        dialog.setFileMode(QFileDialog.FileMode.Directory)  # Устанавливаем режим выбора директории
-        dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)  # Показываем только директории
-        dialog.setWindowTitle("Выберите папку с файлами истории")
+        # Спрашиваем пользователя, что он хочет выбрать: файлы или папку
+        choice_dialog = QDialog(self)
+        choice_dialog.setWindowTitle("Выбор источника файлов")
+        choice_layout = QVBoxLayout(choice_dialog)
         
-        # Добавляем опцию для выбора файлов
-        files_button = QPushButton("Выбрать файлы", dialog)
-        files_button.clicked.connect(lambda: dialog.setFileMode(QFileDialog.FileMode.ExistingFiles))
-        dialog.layout().addWidget(files_button)
-
+        # Добавляем метку с инструкцией
+        instruction_label = QLabel("Выберите способ загрузки файлов:")
+        choice_layout.addWidget(instruction_label)
+        
+        # Добавляем кнопки выбора
+        files_button = QPushButton("Выбрать файлы")
+        folder_button = QPushButton("Выбрать папку")
+        
+        choice_layout.addWidget(files_button)
+        choice_layout.addWidget(folder_button)
+        
         file_paths_to_process = []
-        if dialog.exec():
-            selected_items = dialog.selectedFiles()
-            for item_path in selected_items:
-                if os.path.isdir(item_path):
-                    # Рекурсивно обходим папку и ищем все .txt файлы
-                    for root, _, files in os.walk(item_path):
-                        for file in files:
-                            if file.endswith('.txt'): 
-                                file_paths_to_process.append(os.path.join(root, file))
-                elif os.path.isfile(item_path) and item_path.endswith('.txt'): 
-                     file_paths_to_process.append(item_path)
+        choice_dialog_result = [False]  # Использую список для хранения результата, чтобы иметь возможность изменить значение из lambda
         
-        if not file_paths_to_process:
+        # Обработчики нажатия на кнопки
+        def on_files_clicked():
+            dialog = QFileDialog(self)
+            dialog.setFileMode(QFileDialog.FileMode.ExistingFiles)
+            dialog.setWindowTitle("Выберите файлы истории")
+            dialog.setNameFilter("Текстовые файлы (*.txt)")
+            if dialog.exec():
+                nonlocal file_paths_to_process
+                file_paths_to_process = dialog.selectedFiles()
+                choice_dialog_result[0] = True
+                choice_dialog.accept()
+        
+        def on_folder_clicked():
+            dialog = QFileDialog(self)
+            dialog.setFileMode(QFileDialog.FileMode.Directory)
+            dialog.setOption(QFileDialog.Option.ShowDirsOnly, True)
+            dialog.setWindowTitle("Выберите папку с файлами истории")
+            if dialog.exec():
+                nonlocal file_paths_to_process
+                selected_folder = dialog.selectedFiles()[0]
+                # Рекурсивно обходим папку и ищем все .txt файлы
+                for root, _, files in os.walk(selected_folder):
+                    for file in files:
+                        if file.endswith('.txt'):
+                            file_paths_to_process.append(os.path.join(root, file))
+                choice_dialog_result[0] = True
+                choice_dialog.accept()
+        
+        files_button.clicked.connect(on_files_clicked)
+        folder_button.clicked.connect(on_folder_clicked)
+        
+        # Показываем диалог выбора
+        choice_dialog.exec()
+        
+        # Если выбор не был сделан или список файлов пуст, выходим
+        if not choice_dialog_result[0] or not file_paths_to_process:
             return
-            
+        
         session_id_for_processing = self.current_session_id
         if not session_id_for_processing or session_id_for_processing == "all":
             session_id_for_processing = self.create_new_session()
