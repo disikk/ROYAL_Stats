@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 """
@@ -24,8 +24,14 @@ import sys
 import os
 import logging
 from PyQt6.QtWidgets import QApplication
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QIcon, QFont
+from PyQt6.QtCore import QLocale, QTranslator, QCoreApplication
 from ui.main_window import MainWindow
+
+# Глобальная настройка кодировки
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Настройка логирования
 def setup_logging():
@@ -39,7 +45,7 @@ def setup_logging():
         level=logging.INFO,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
-            logging.FileHandler('logs/royal_stats.log'),
+            logging.FileHandler('logs/royal_stats.log', encoding='utf-8'),
             logging.StreamHandler()
         ]
     )
@@ -65,8 +71,16 @@ def main():
         app.setApplicationName("ROYAL_Stats")
         app.setApplicationVersion("1.0")
         
-        # Настраиваем стиль приложения
+        # Настраиваем локализацию для поддержки кириллицы
+        locale = QLocale(QLocale.Language.Russian)
+        QLocale.setDefault(locale)
+        
+        # Настраиваем стиль приложения с указанием шрифта, поддерживающего кириллицу
         app.setStyle("Fusion")
+        
+        # Устанавливаем шрифт по умолчанию с поддержкой кириллицы
+        default_font = QFont("Arial", 9)  # Arial обычно хорошо поддерживает кириллицу
+        app.setFont(default_font)
         
         # Создаем главное окно приложения
         window = MainWindow()

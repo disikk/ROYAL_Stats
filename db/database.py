@@ -508,21 +508,21 @@ class StatsDatabase:
                 }
                 
             # Преобразуем результат в словарь
-            stats = {
-                'total_tournaments': row['total_tournaments'],
-                'total_knockouts': row['total_knockouts'],
-                'total_knockouts_x2': row['total_knockouts_x2'],
-                'total_knockouts_x10': row['total_knockouts_x10'],
-                'total_knockouts_x100': row['total_knockouts_x100'],
-                'total_knockouts_x1000': row['total_knockouts_x1000'],
-                'total_knockouts_x10000': row['total_knockouts_x10000'],
-                'avg_finish_place': row['avg_finish_place'],
-                'first_places': row['first_places'],
-                'second_places': row['second_places'],
-                'third_places': row['third_places'],
-                'total_prize': row['total_prize'],
-                'avg_initial_stack': row.get('avg_initial_stack', 0.0)  # С обработкой случая, если поле отсутствует
-            }
+            stats = {}
+            # ИСПРАВЛЕНИЕ: доступ к элементам sqlite3.Row как к словарю
+            for key in ['total_tournaments', 'total_knockouts', 
+                     'total_knockouts_x2', 'total_knockouts_x10', 
+                     'total_knockouts_x100', 'total_knockouts_x1000', 
+                     'total_knockouts_x10000', 'avg_finish_place', 
+                     'first_places', 'second_places', 'third_places', 
+                     'total_prize']:
+                stats[key] = row[key] if key in row.keys() else 0
+                
+            # Отдельно добавляем avg_initial_stack, которого может не быть в старых базах
+            try:
+                stats['avg_initial_stack'] = row['avg_initial_stack']
+            except (IndexError, KeyError):
+                stats['avg_initial_stack'] = 0.0
             
             # ИСПРАВЛЕНО: проверка и приведение значений к правильным типам
             for key in stats:
@@ -584,7 +584,11 @@ class StatsDatabase:
             # Преобразуем результат в список словарей
             sessions = []
             for row in rows:
-                sessions.append(dict(row))
+                # Преобразуем sqlite3.Row в dict
+                session_dict = {}
+                for key in row.keys():
+                    session_dict[key] = row[key]
+                sessions.append(session_dict)
                 
             return sessions
         except Exception as e:
@@ -613,8 +617,12 @@ class StatsDatabase:
             if not row:
                 return None
                 
-            # Преобразуем результат в словарь
-            return dict(row)
+            # Преобразуем sqlite3.Row в dict
+            result_dict = {}
+            for key in row.keys():
+                result_dict[key] = row[key]
+                
+            return result_dict
         except Exception as e:
             logger.error(f"Ошибка при получении статистики сессии {session_id}: {str(e)}", exc_info=True)
             return None
@@ -641,7 +649,11 @@ class StatsDatabase:
             # Преобразуем результат в список словарей
             tournaments = []
             for row in rows:
-                tournaments.append(dict(row))
+                # Преобразуем sqlite3.Row в dict
+                tournament_dict = {}
+                for key in row.keys():
+                    tournament_dict[key] = row[key]
+                tournaments.append(tournament_dict)
                 
             return tournaments
         except Exception as e:
@@ -670,7 +682,11 @@ class StatsDatabase:
             # Преобразуем результат в список словарей
             knockouts = []
             for row in rows:
-                knockouts.append(dict(row))
+                # Преобразуем sqlite3.Row в dict
+                knockout_dict = {}
+                for key in row.keys():
+                    knockout_dict[key] = row[key]
+                knockouts.append(knockout_dict)
                 
             return knockouts
         except Exception as e:
