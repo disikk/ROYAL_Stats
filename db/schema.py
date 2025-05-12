@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS tournaments (
     start_time TEXT,
     finish_place INTEGER,
     prize REAL,
+    knockouts_x2 INTEGER,
     knockouts_x10 INTEGER,
     knockouts_x100 INTEGER,
     knockouts_x1000 INTEGER,
@@ -53,6 +54,7 @@ CREATE TABLE IF NOT EXISTS statistics (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     total_tournaments INTEGER DEFAULT 0,
     total_knockouts INTEGER DEFAULT 0,
+    total_knockouts_x2 INTEGER DEFAULT 0,
     total_knockouts_x10 INTEGER DEFAULT 0,
     total_knockouts_x100 INTEGER DEFAULT 0,
     total_knockouts_x1000 INTEGER DEFAULT 0,
@@ -106,8 +108,8 @@ INSERT_TOURNAMENT = """
 INSERT INTO tournaments (
     tournament_id, tournament_name, game_type, buy_in, fee, bounty,
     total_buy_in, players_count, prize_pool, start_time, finish_place, prize,
-    knockouts_x10, knockouts_x100, knockouts_x1000, knockouts_x10000, session_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    knockouts_x2, knockouts_x10, knockouts_x100, knockouts_x1000, knockouts_x10000, session_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 # Вставка информации о накауте
@@ -122,6 +124,7 @@ UPDATE_STATISTICS = """
 UPDATE statistics SET
     total_tournaments = ?,
     total_knockouts = ?,
+    total_knockouts_x2 = ?,
     total_knockouts_x10 = ?,
     total_knockouts_x100 = ?,
     total_knockouts_x1000 = ?,
@@ -218,6 +221,7 @@ DELETE FROM places_distribution;
 UPDATE statistics SET
     total_tournaments = 0,
     total_knockouts = 0,
+    total_knockouts_x2 = 0,
     total_knockouts_x10 = 0,
     total_knockouts_x100 = 0,
     total_knockouts_x1000 = 0,

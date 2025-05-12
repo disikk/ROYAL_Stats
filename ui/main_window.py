@@ -104,7 +104,7 @@ class MainWindow(QMainWindow):
         
         # Парсеры
         self.hand_history_parser = HandHistoryParser()
-        self.tournament_summary_parser = TournamentSummaryParser()
+        self.tournament_summary_parser = TournamentSummaryParser(hero_name="Hero")
         
         # Пул потоков для выполнения задач
         self.threadpool = QThreadPool()
@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
         self.load_files_button.setEnabled(False)
         
         # Создаем worker для обработки файлов в отдельном потоке
-        worker = Worker(self.process_files, file_paths, session_id)
+        worker = Worker(self._process_files_worker, file_paths, session_id)
         
         # Подключаем сигналы
         worker.signals.finished.connect(self.on_files_processing_finished)
@@ -644,6 +644,20 @@ class MainWindow(QMainWindow):
         
         # Запускаем обработку в отдельном потоке
         self.threadpool.start(worker)
+        
+    def _process_files_worker(self, file_paths, session_id):
+        """
+        Функция для обработки файлов в отдельном потоке.
+        
+        Args:
+            file_paths: Список путей к файлам
+            session_id: ID сессии
+            
+        Returns:
+            Статистика обработки
+        """
+        results = self.process_files(file_paths, session_id)
+        return results
         
     def process_files(self, file_paths, session_id):
         """
@@ -660,7 +674,10 @@ class MainWindow(QMainWindow):
         hand_history_files = []
         tournament_summary_files = []
         
-        for index, file_path in enumerate(file_paths):
+        # В worker.signals.progress будет отправляться прогресс
+        progress_value = 0
+        
+        for file_path in file_paths:
             file_name = os.path.basename(file_path)
             
             # Проверяем соответствие имени файла шаблонам
@@ -670,8 +687,8 @@ class MainWindow(QMainWindow):
                   file_name.endswith('.txt')):
                 tournament_summary_files.append(file_path)
                 
-            # Отправляем сигнал прогресса
-            self.signals.progress.emit(index + 1)
+            # Увеличиваем значение прогресса
+            progress_value += 1
                 
         # Словарь для хранения результатов обработки
         results = {
@@ -684,7 +701,7 @@ class MainWindow(QMainWindow):
         }
         
         # Обрабатываем файлы сводки турниров
-        for i, file_path in enumerate(tournament_summary_files):
+        for file_path in tournament_summary_files:
             try:
                 # Парсим файл
                 tournament_data = self.tournament_summary_parser.parse_file(file_path)
@@ -697,7 +714,7 @@ class MainWindow(QMainWindow):
                 results['errors'].append(f"Ошибка при обработке {file_path}: {str(e)}")
                 
         # Обрабатываем файлы истории рук
-        for i, file_path in enumerate(hand_history_files):
+        for file_path in hand_history_files:
             try:
                 # Парсим файл
                 hand_history_data = self.hand_history_parser.parse_file(file_path)
@@ -827,81 +844,82 @@ class MainWindow(QMainWindow):
                 f"Не удалось обновить статистику: {str(e)}"
             )
             
-def update_session_statistics(self, session_id):
-    """
-    Обновляет статистику конкретной сессии.
-    
-    Args:
-        session_id: ID сессии
-    """
-    if not self.stats_db:
-        return
+    def update_session_statistics(self, session_id):
+        """
+        Обновляет статистику конкретной сессии.
         
-    try:
-        # Получаем статистику сессии
-        session_stats = self.stats_db.get_session_stats(session_id)
-        
-        if not session_stats:
+        Args:
+            session_id: ID сессии
+        """
+        if not self.stats_db:
             return
             
-        # Подготавливаем данные для отображения
-        stats = {
-            'total_tournaments': session_stats['tournaments_count'],
-            'total_knockouts': session_stats['knockouts_count'],
-            'avg_finish_place': session_stats['avg_finish_place'],
-            'total_prize': session_stats['total_prize'],
+        try:
+            # Получаем статистику сессии
+            session_stats = self.stats_db.get_session_stats(session_id)
             
-            # Получаем данные о местах из турниров сессии
-            'first_places': 0,
-            'second_places': 0,
-            'third_places': 0,
-            'total_knockouts_x2': 0,
-            'total_knockouts_x10': 0,
-            'total_knockouts_x100': 0,
-            'total_knockouts_x1000': 0,
-            'total_knockouts_x10000': 0
-        }
-        
-        # Получаем турниры сессии
-        tournaments = self.stats_db.get_session_tournaments(session_id)
-        
-        # Заполняем данные о местах и нокаутах
-        for tournament in tournaments:
-            place = tournament.get('finish_place')
-            if place == 1:
-                stats['first_places'] += 1
-            elif place == 2:
-                stats['second_places'] += 1
-            elif place == 3:
-                stats['third_places'] += 1
+            if not session_stats:
+                return
                 
-            stats['total_knockouts_x2'] += tournament.get('knockouts_x2', 0)
-            stats['total_knockouts_x10'] += tournament.get('knockouts_x10', 0)
-            stats['total_knockouts_x100'] += tournament.get('knockouts_x100', 0)
-            stats['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0)
-            stats['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0)
+            # Подготавливаем данные для отображения
+            stats = {
+                'total_tournaments': session_stats['tournaments_count'],
+                'total_knockouts': session_stats['knockouts_count'],
+                'avg_finish_place': session_stats['avg_finish_place'],
+                'total_prize': session_stats['total_prize'],
+                
+                # Получаем данные о местах из турниров сессии
+                'first_places': 0,
+                'second_places': 0,
+                'third_places': 0,
+                'total_knockouts_x2': 0,
+                'total_knockouts_x10': 0,
+                'total_knockouts_x100': 0,
+                'total_knockouts_x1000': 0,
+                'total_knockouts_x10000': 0
+            }
             
-        # Обновляем сетку с основными показателями
-        self.stats_grid.update_stats(stats)
-        
-        # Получаем распределение мест для сессии
-        places_distribution = {i: 0 for i in range(1, 10)}
-        for tournament in tournaments:
-            place = tournament.get('finish_place')
-            if place and 1 <= place <= 9:
-                places_distribution[place] += 1
+            # Получаем турниры сессии
+            tournaments = self.stats_db.get_session_tournaments(session_id)
+            
+            # Заполняем данные о местах и нокаутах
+            for tournament in tournaments:
+                place = tournament.get('finish_place')
+                if place == 1:
+                    stats['first_places'] += 1
+                elif place == 2:
+                    stats['second_places'] += 1
+                elif place == 3:
+                    stats['third_places'] += 1
+                    
+                # Проверяем наличие ключей, чтобы избежать ошибок
+                stats['total_knockouts_x2'] += tournament.get('knockouts_x2', 0) or 0
+                stats['total_knockouts_x10'] += tournament.get('knockouts_x10', 0) or 0
+                stats['total_knockouts_x100'] += tournament.get('knockouts_x100', 0) or 0
+                stats['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0) or 0
+                stats['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0) or 0
                 
-        # Обновляем гистограмму
-        self.place_chart.update_chart(places_distribution)
-        
-        # Отображаем сообщение
-        self.status_bar.showMessage(f"Статистика сессии '{session_stats['session_name']}' обновлена")
-    except Exception as e:
-        QMessageBox.critical(
-            self,
-            "Ошибка",
-            f"Не удалось обновить статистику сессии: {str(e)}"
-        )
+            # Обновляем сетку с основными показателями
+            self.stats_grid.update_stats(stats)
+            
+            # Получаем распределение мест для сессии
+            places_distribution = {i: 0 for i in range(1, 10)}
+            for tournament in tournaments:
+                place = tournament.get('finish_place')
+                if place and 1 <= place <= 9:
+                    places_distribution[place] += 1
+                    
+            # Обновляем гистограмму
+            self.place_chart.update_chart(places_distribution)
+            
+            # Отображаем сообщение
+            self.status_bar.showMessage(f"Статистика сессии '{session_stats['session_name']}' обновлена")
+        except Exception as e:
+            QMessageBox.critical(
+                self,
+                "Ошибка",
+                f"Не удалось обновить статистику сессии: {str(e)}"
+            )
                     
     def load_all_tournaments(self):
         """
@@ -1005,8 +1023,9 @@ def update_session_statistics(self, session_id):
             )
             
             # x10 Нокауты
+            x10_knockouts = tournament.get('knockouts_x10', 0) or 0
             self.tournaments_table.setItem(
-                row, 5, QTableWidgetItem(str(tournament.get('knockouts_x10', 0)))
+                row, 5, QTableWidgetItem(str(x10_knockouts))
             )
             
             # Дата
