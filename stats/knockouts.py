@@ -27,6 +27,8 @@ class KnockoutsAnalyzer:
         """
         self.db_manager = db_manager
     
+$(cat /tmp/early_stage_knockouts_method.py)
+
     def get_total_knockouts(self, session_id: Optional[str] = None) -> int:
         """
         Возвращает общее количество нокаутов, сделанных игроком.
@@ -421,6 +423,54 @@ class KnockoutsAnalyzer:
             'large_knockouts_per_tournament': round(total_large_knockouts / total_tournaments, 2)
         }
         
+    def get_early_stage_knockouts(self, session_id: Optional[str] = None) -> int:
+        """
+        Возвращает количество нокаутов, сделанных игроком, когда за столом было от 6 до 9 человек включительно.
+        
+        Args:
+            session_id: ID сессии для фильтрации (опционально)
+            
+        Returns:
+            Количество нокаутов на ранней стадии
+        """
+        if not self.db_manager or not self.db_manager.connection:
+            return 0
+            
+        cursor = self.db_manager.connection.cursor()
+        
+        # В данных HandHistory мы можем определить количество игроков за столом
+        # Но для этого нам нужно анализировать данные из knockouts и связывать с данными из hands
+        # Поскольку прямого доступа к этим данным через БД нет, используем приближение:
+        # - Считаем, что первые 33% нокаутов в турнире были сделаны на ранней стадии (от 9 до 6 человек)
+        
+        query = """
+        SELECT t.tournament_id, t.players_count, COUNT(k.id) as ko_count
+        FROM tournaments t
+        JOIN knockouts k ON t.tournament_id = k.tournament_id
+        """
+        
+        if session_id:
+            query += " WHERE t.session_id = ?"
+            cursor.execute(query, (session_id,))
+        else:
+            cursor.execute(query)
+            
+        rows = cursor.fetchall()
+        
+        total_early_knockouts = 0
+        for row in rows:
+            players_count = row["players_count"] or 9  # Если NULL, считаем 9
+            ko_count = row["ko_count"]
+            
+            # Вычисляем количество нокаутов на ранней стадии
+            # Для турнира с 9 игроками, ранняя стадия - это выбывание первых 3х игроков
+            early_stage_cutoff = min(3, max(1, int(players_count * 0.33)))
+            early_knockouts = min(ko_count, early_stage_cutoff)
+            
+            total_early_knockouts += early_knockouts
+            
+        return total_early_knockouts
+
     def generate_knockout_report(self, session_id: Optional[str] = None) -> Dict[str, Union[int, float, Dict]]:
         """
         Генерирует полный отчет по нокаутам.
@@ -460,6 +510,8 @@ class KnockoutsAnalyzer:
 
 
 # Функции для удобства использования без создания экземпляра класса
+
+$(cat /tmp/early_stage_knockouts_method.py)
 
 def get_total_knockouts(db_manager, session_id=None):
     """

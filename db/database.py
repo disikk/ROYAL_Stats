@@ -379,6 +379,11 @@ class StatsDatabase:
             raise ValueError("Не подключена база данных")
             
         try:
+            # Получаем общую сумму бай-инов
+            self.db_manager.cursor.execute("SELECT SUM(total_buy_in) FROM tournaments WHERE total_buy_in IS NOT NULL")
+            result = self.db_manager.cursor.fetchone()[0]
+            total_buy_in = result if result is not None else 0
+
             # Получаем количество турниров
             self.db_manager.cursor.execute("SELECT COUNT(*) FROM tournaments")
             total_tournaments = self.db_manager.cursor.fetchone()[0]
@@ -454,7 +459,8 @@ class StatsDatabase:
                 second_places,
                 third_places,
                 total_prize,
-                avg_initial_stack
+                avg_initial_stack,
+                total_buy_in  # Добавляем общую сумму бай-инов
             )
             
             # Убеждаемся, что запись существует
@@ -491,6 +497,7 @@ class StatsDatabase:
             row = self.db_manager.cursor.fetchone()
             
             if not row:
+                # Базовая статистика для случая, если запись не найдена
                 return {
                     'total_tournaments': 0,
                     'total_knockouts': 0,
@@ -504,7 +511,8 @@ class StatsDatabase:
                     'second_places': 0,
                     'third_places': 0,
                     'total_prize': 0.0,
-                    'avg_initial_stack': 0.0
+                    'avg_initial_stack': 0.0,
+                    'total_buy_in': 0.0  # Добавляем общую сумму бай-инов
                 }
                 
             # Преобразуем результат в словарь
@@ -523,6 +531,12 @@ class StatsDatabase:
                 stats['avg_initial_stack'] = row['avg_initial_stack']
             except (IndexError, KeyError):
                 stats['avg_initial_stack'] = 0.0
+
+            # Отдельно добавляем total_buy_in
+            try:
+                stats['total_buy_in'] = row['total_buy_in']
+            except (IndexError, KeyError):
+                stats['total_buy_in'] = 0.0
             
             # ИСПРАВЛЕНО: проверка и приведение значений к правильным типам
             for key in stats:

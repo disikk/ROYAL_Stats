@@ -44,6 +44,7 @@ from ui.db_dialog import DatabaseDialog
 from ui.visualizations import PlaceDistributionChart, StatsGrid # Используем royal_stats_visualizations_py_v2
 from parsers.hand_history import HandHistoryParser
 from parsers.tournament_summary import TournamentSummaryParser, TournamentSummary 
+from stats.knockouts import KnockoutsAnalyzer
 
 # Настройка логирования
 logger = logging.getLogger('ROYAL_Stats.MainWindow') 
@@ -896,6 +897,11 @@ class MainWindow(QMainWindow):
             self.stats_db.update_overall_statistics() 
             stats = self.stats_db.get_overall_statistics()
             
+            # Добавим расчет ранних нокаутов
+            ko_analyzer = KnockoutsAnalyzer(self.db_manager)
+            early_stage_knockouts = ko_analyzer.get_early_stage_knockouts()
+            stats['early_stage_knockouts'] = early_stage_knockouts
+            
             # Проверим наличие ключевых данных в статистике
             logger.debug(f"Получена общая статистика: {stats}")
             
@@ -974,6 +980,11 @@ class MainWindow(QMainWindow):
                 stats_for_grid['total_knockouts_x1000'] += tournament.get('knockouts_x1000', 0) or 0
                 stats_for_grid['total_knockouts_x10000'] += tournament.get('knockouts_x10000', 0) or 0
                 
+            # Добавляем расчет ранних нокаутов для сессии
+            ko_analyzer = KnockoutsAnalyzer(self.db_manager)
+            early_stage_knockouts = ko_analyzer.get_early_stage_knockouts(session_id)
+            stats_for_grid['early_stage_knockouts'] = early_stage_knockouts
+            
             self.stats_grid.update_stats(stats_for_grid)
             self.place_chart.update_chart(places_distribution_session) 
             

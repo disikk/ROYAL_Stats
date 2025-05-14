@@ -66,6 +66,8 @@ CREATE TABLE IF NOT EXISTS statistics (
     third_places INTEGER DEFAULT 0,
     total_prize REAL DEFAULT 0,
     avg_initial_stack REAL DEFAULT 0,
+    total_buy_in REAL DEFAULT 0,
+    total_buy_in REAL DEFAULT 0,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -91,6 +93,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     avg_finish_place REAL DEFAULT 0,
     total_prize REAL DEFAULT 0,
     avg_initial_stack REAL DEFAULT 0,
+    total_buy_in REAL DEFAULT 0,
+    total_buy_in REAL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """

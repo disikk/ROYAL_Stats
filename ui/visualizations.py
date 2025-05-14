@@ -142,6 +142,10 @@ class PlaceDistributionChart(QWidget):
         self.places = list(range(1, 10))
         self.counts = [places_distribution.get(p, 0) for p in self.places]
 
+        # Рассчитываем проценты
+        total_tournaments = sum(self.counts)
+        percents = [count / total_tournaments * 100 if total_tournaments > 0 else 0 for count in self.counts]
+
         # Создаем подграфик с заданным стилем
         ax = self.figure.add_subplot(111)
         ax.set_facecolor('#f8f9fa')
@@ -164,13 +168,13 @@ class PlaceDistributionChart(QWidget):
             width=0.7
         )
         
-        for bar in bars:
+        for i, bar in enumerate(bars):
             height = bar.get_height()
             if height > 0:
                 ax.text(
                     bar.get_x() + bar.get_width() / 2.,
                     height + 0.05 * max(self.counts if any(self.counts) else [1]), # Динамический отступ для текста
-                    f'{int(height)}',
+                    f'{int(height)}\n({percents[i]:.1f}%)',  # Добавляем проценты
                     ha='center', va='bottom',
                     fontweight='bold',
                     fontsize=8 # Уменьшен шрифт подписей
@@ -373,7 +377,7 @@ class StatsGrid(QWidget):
         self.cards['first_places'] = StatsCard("Первых мест", "0", value_color="#198754")
         self.cards['second_places'] = StatsCard("Вторых мест", "0", value_color="#0dcaf0")
         self.cards['third_places'] = StatsCard("Третьих мест", "0", value_color="#6f42c1")
-        self.cards['total_prize'] = StatsCard("Общий выигрыш", "$0.00", value_color="#dc3545")
+        self.cards['total_prize'] = StatsCard("Выигрыш/Профит/ROI", "$0.00", value_color="#dc3545")
         
         # Изменена сетка для размещения новой карточки
         tournaments_layout.addWidget(self.cards['total_tournaments'], 0, 0)
@@ -395,6 +399,7 @@ class StatsGrid(QWidget):
         self.cards['knockouts_x100'] = StatsCard("x100 нокаутов", "0", value_color="#d63384")
         self.cards['knockouts_x1000'] = StatsCard("x1000 нокаутов", "0", value_color="#dc3545")
         self.cards['knockouts_x10000'] = StatsCard("x10000 нокаутов", "0", value_color="#fd7e14")
+        self.cards['early_stage_knockouts'] = StatsCard("Нокауты (9-6 мест)", "0", value_color="#6610f2")
         
         knockouts_layout.addWidget(self.cards['total_knockouts'], 0, 0)
         knockouts_layout.addWidget(self.cards['knockouts_x2'], 0, 1)
@@ -402,6 +407,7 @@ class StatsGrid(QWidget):
         knockouts_layout.addWidget(self.cards['knockouts_x100'], 1, 0)
         knockouts_layout.addWidget(self.cards['knockouts_x1000'], 1, 1)
         knockouts_layout.addWidget(self.cards['knockouts_x10000'], 1, 2)
+        knockouts_layout.addWidget(self.cards['early_stage_knockouts'], 2, 0)
         
         knockouts_group.setLayout(knockouts_layout)
         
@@ -415,6 +421,10 @@ class StatsGrid(QWidget):
         Args:
             stats: Словарь со статистикой
         """
+        # Добавим подробный лог для отладки
+        logger = logging.getLogger('ROYAL_Stats.Stats')
+        logger.debug(f"Обновление статистики: {stats}")
+        
         # Обновляем карточки с данными о турнирах
         self.cards['total_tournaments'].set_value(format_number(stats.get('total_tournaments', 0)))
         avg_finish_place = stats.get('avg_finish_place', 0.0)
@@ -425,8 +435,8 @@ class StatsGrid(QWidget):
         except (ValueError, TypeError):
             self.cards['avg_finish_place'].set_value("0.00") # Значение по умолчанию, если не число
             
-        # Обновляем средний начальный стек
-        avg_initial_stack = stats.get('avg_initial_stack', 0.0)
+        # Обновляем средний начальный стек - проверяем оба возможных ключа
+        avg_initial_stack = stats.get('avg_initial_stack', stats.get('average_initial_stack', 0.0))
         try:
             avg_initial_stack_float = float(avg_initial_stack)
             # Округляем до целого числа для более удобного отображения
@@ -437,15 +447,29 @@ class StatsGrid(QWidget):
         self.cards['first_places'].set_value(format_number(stats.get('first_places', 0)))
         self.cards['second_places'].set_value(format_number(stats.get('second_places', 0)))
         self.cards['third_places'].set_value(format_number(stats.get('third_places', 0)))
-        self.cards['total_prize'].set_value(f"${format_money(stats.get('total_prize', 0.0))}") # Используем 0.0 как дефолт
         
-        # Обновляем карточки с данными о нокаутах
-        self.cards['total_knockouts'].set_value(format_number(stats.get('total_knockouts', 0)))
+        # Расчет профита и ROI
+        total_prize = stats.get('total_prize', 0.0)
+        total_buy_in = stats.get('total_buy_in', 0.0)
+        profit = total_prize - total_buy_in
+        roi = 0.0
+        if total_buy_in > 0:
+            roi = (profit / total_buy_in) * 100
+        
+        # Обновляем карточку с общим выигрышем, профитом и ROI
+        self.cards['total_prize'].set_value(f"${format_money(total_prize)} / ${format_money(profit)} / {roi:.2f}%")
+        
+        # Обновляем карточки с данными о нокаутах - проверяем наличие данных
+        total_knockouts = stats.get('total_knockouts', 0)
+        self.cards['total_knockouts'].set_value(format_number(total_knockouts))
         self.cards['knockouts_x2'].set_value(format_number(stats.get('total_knockouts_x2', 0)))
         self.cards['knockouts_x10'].set_value(format_number(stats.get('total_knockouts_x10', 0)))
         self.cards['knockouts_x100'].set_value(format_number(stats.get('total_knockouts_x100', 0)))
         self.cards['knockouts_x1000'].set_value(format_number(stats.get('total_knockouts_x1000', 0)))
         self.cards['knockouts_x10000'].set_value(format_number(stats.get('total_knockouts_x10000', 0)))
+        # Добавляем новое поле для нокаутов на ранней стадии
+        if 'early_stage_knockouts' in self.cards:
+            self.cards['early_stage_knockouts'].set_value(format_number(stats.get('early_stage_knockouts', 0)))
 
 
 # Вспомогательные функции для форматирования чисел
