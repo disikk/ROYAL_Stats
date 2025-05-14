@@ -67,7 +67,6 @@ CREATE TABLE IF NOT EXISTS statistics (
     total_prize REAL DEFAULT 0,
     avg_initial_stack REAL DEFAULT 0,
     total_buy_in REAL DEFAULT 0,
-    total_buy_in REAL DEFAULT 0,
     last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
 """
@@ -93,7 +92,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     avg_finish_place REAL DEFAULT 0,
     total_prize REAL DEFAULT 0,
     avg_initial_stack REAL DEFAULT 0,
-    total_buy_in REAL DEFAULT 0,
     total_buy_in REAL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 )
@@ -143,6 +141,7 @@ UPDATE statistics SET
     third_places = ?,
     total_prize = ?,
     avg_initial_stack = ?,
+    total_buy_in = ?,
     last_updated = CURRENT_TIMESTAMP
 WHERE id = 1
 """
@@ -241,6 +240,7 @@ UPDATE statistics SET
     third_places = 0,
     total_prize = 0,
     avg_initial_stack = 0,
+    total_buy_in = 0,
     last_updated = CURRENT_TIMESTAMP
 WHERE id = 1;
 """

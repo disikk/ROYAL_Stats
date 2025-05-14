@@ -5,6 +5,7 @@
 Модуль с визуальными компонентами для отображения статистики в покерном трекере ROYAL_Stats.
 """
 
+import logging
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas

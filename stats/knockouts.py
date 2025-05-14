@@ -27,8 +27,6 @@ class KnockoutsAnalyzer:
         """
         self.db_manager = db_manager
     
-$(cat /tmp/early_stage_knockouts_method.py)
-
     def get_total_knockouts(self, session_id: Optional[str] = None) -> int:
         """
         Возвращает общее количество нокаутов, сделанных игроком.
@@ -510,8 +508,6 @@ $(cat /tmp/early_stage_knockouts_method.py)
 
 
 # Функции для удобства использования без создания экземпляра класса
-
-$(cat /tmp/early_stage_knockouts_method.py)
 
 def get_total_knockouts(db_manager, session_id=None):
     """
